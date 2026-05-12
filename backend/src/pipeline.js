@@ -1,12 +1,12 @@
 import { Router } from 'express';
-import { CONFIG, TIMING } from '../config.js';
-import { fetchWithTimeout, pickArrImageUrl, qbittorrentLogin } from '../utils.js';
+import { CONFIG, TIMING } from './config.js';
+import { fetchWithTimeout, pickArrImageUrl, qbittorrentLogin } from './utils.js';
 import {
   getPipeline, getPipelineItem, addPipelineItem, advancePipeline,
   completePipeline, removePipelineItem, setPipelineStuck,
   addLogStep, updateLogEntry, logActivity,
   getActivityLog, registerInterval,
-} from '../state.js';
+} from './state.js';
 
 const router = Router();
 
@@ -322,6 +322,20 @@ registerInterval(setInterval(checkPipelineStuck, TIMING.CHECK_STUCK_INTERVAL_MS 
 
 const queueAlerts = new Map();
 
+export function restoreQueueAlertsFromActivityLog() {
+  queueAlerts.clear();
+  for (const entry of getActivityLog()) {
+    if (entry?.type !== 'queue' || entry?.status !== 'error') continue;
+    const service = entry.details?.service || entry.context?.service;
+    const discriminator = entry.details?.downloadId || entry.details?.queueId || null;
+    if (!service || !discriminator) continue;
+    const key = `${service}-q-${discriminator}`;
+    if (!queueAlerts.has(key)) {
+      queueAlerts.set(key, { logId: entry.id, status: 'error' });
+    }
+  }
+}
+
 export async function monitorQueues() {
   const tasks = [];
 
@@ -416,8 +430,14 @@ export async function monitorQueues() {
           const hasError = item.status === 'warning' || item.status === 'error' || item.trackedDownloadStatus === 'warning' || item.trackedDownloadStatus === 'error' || (item.statusMessages?.length > 0);
           const msgs = (item.statusMessages || []).map(m => m.title || m.messages?.join(', ')).filter(Boolean);
           const errorDetail = item.errorMessage || msgs.join('; ') || '';
+          const queueSeriesId = item.seriesId || item.series?.id;
+          const pipelineItems = getPipeline();
+          const relatedPipelineItems = pipelineItems.filter(
+            pItem => pItem.service === 'sonarr' && pItem.seriesId && pItem.seriesId === queueSeriesId,
+          );
+          const shouldTrackQueueAlert = relatedPipelineItems.length > 0 || queueAlerts.has(key);
 
-          if (isFirstForDlid && hasError && !queueAlerts.has(key)) {
+          if (isFirstForDlid && hasError && !queueAlerts.has(key) && shouldTrackQueueAlert) {
             const logId = logActivity('queue', `${label}: ${errorDetail || 'download issue'}`, { service: 'sonarr', queueId: item.id, downloadId: item.downloadId, recordCount: epCount }, 'error', { service: 'sonarr', title: series });
             queueAlerts.set(key, { logId, status: 'error' });
           } else if (isFirstForDlid && !hasError && queueAlerts.has(key)) {
@@ -426,10 +446,7 @@ export async function monitorQueues() {
             queueAlerts.delete(key);
           }
 
-          const queueSeriesId = item.seriesId || item.series?.id;
-          const pipelineItems = getPipeline();
-          for (const pItem of pipelineItems) {
-            if (pItem.service !== 'sonarr' || !pItem.seriesId || pItem.seriesId !== queueSeriesId) continue;
+          for (const pItem of relatedPipelineItems) {
             if (pItem.stage === 'grabbed' || pItem.stage === 'searching' || pItem.stage === 'stuck') {
               const progress = (item.size > 0 && item.sizeleft != null)
                 ? Math.round((1 - item.sizeleft / item.size) * 100) : 0;
@@ -477,8 +494,14 @@ export async function monitorQueues() {
           const hasError = item.status === 'warning' || item.status === 'error' || item.trackedDownloadStatus === 'warning' || item.trackedDownloadStatus === 'error' || (item.statusMessages?.length > 0);
           const msgs = (item.statusMessages || []).map(m => m.title || m.messages?.join(', ')).filter(Boolean);
           const errorDetail = item.errorMessage || msgs.join('; ') || '';
+          const queueMovieId = item.movieId || item.movie?.id;
+          const pipelineItems = getPipeline();
+          const relatedPipelineItems = pipelineItems.filter(
+            pItem => pItem.service === 'radarr' && pItem.movieId && pItem.movieId === queueMovieId,
+          );
+          const shouldTrackQueueAlert = relatedPipelineItems.length > 0 || queueAlerts.has(key);
 
-          if (isFirstForDlid && hasError && !queueAlerts.has(key)) {
+          if (isFirstForDlid && hasError && !queueAlerts.has(key) && shouldTrackQueueAlert) {
             const logId = logActivity('queue', `${title}: ${errorDetail || 'download issue'}`, { service: 'radarr', queueId: item.id, downloadId: item.downloadId }, 'error', { service: 'radarr', title });
             queueAlerts.set(key, { logId, status: 'error' });
           } else if (isFirstForDlid && !hasError && queueAlerts.has(key)) {
@@ -487,10 +510,7 @@ export async function monitorQueues() {
             queueAlerts.delete(key);
           }
 
-          const queueMovieId = item.movieId || item.movie?.id;
-          const pipelineItems = getPipeline();
-          for (const pItem of pipelineItems) {
-            if (pItem.service !== 'radarr' || !pItem.movieId || pItem.movieId !== queueMovieId) continue;
+          for (const pItem of relatedPipelineItems) {
             if (pItem.stage === 'grabbed' || pItem.stage === 'searching' || pItem.stage === 'stuck') {
               const progress = (item.size > 0 && item.sizeleft != null)
                 ? Math.round((1 - item.sizeleft / item.size) * 100) : 0;

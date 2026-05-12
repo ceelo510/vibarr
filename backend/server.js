@@ -8,6 +8,7 @@ import {
   setupGracefulShutdown,
 } from './src/middleware.js';
 import { loadBwLifetime, loadPersistedActivityLog, logServerEvent } from './src/state.js';
+import { restoreQueueAlertsFromActivityLog } from './src/pipeline.js';
 import mountRoutes from './src/routes/index.js';
 
 const app = express();
@@ -24,6 +25,7 @@ app.use(rateLimitMiddleware);
 // Restore persisted counters before requests begin mutating in-memory state.
 const bandwidthRestore = loadBwLifetime();
 const activityRestore = loadPersistedActivityLog();
+restoreQueueAlertsFromActivityLog();
 const restoreFailed = [bandwidthRestore, activityRestore].some((restore) => restore?.status === 'error' || restore?.status === 'invalid');
 logServerEvent(restoreFailed ? 'error' : 'info', 'backend.boot.state_restore', {
   bandwidth: bandwidthRestore,

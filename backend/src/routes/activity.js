@@ -1,21 +1,16 @@
 import { Router } from 'express';
-import { getActivityLog } from '../state.js';
+import { getActivityFeed, getActivityLog, persistActivityLog } from '../state.js';
 
 const router = Router();
 
 router.get('/activity-log', (req, res) => {
-  const activityLog = getActivityLog();
-  const since = req.query.since;
-  const limit = Math.min(parseInt(req.query.limit) || 50, 100);
-  let entries = activityLog;
-  if (since) {
-    const sinceDate = new Date(since);
-    if (!isNaN(sinceDate.getTime())) {
-      entries = entries.filter(e => new Date(e.timestamp) > sinceDate);
-    }
-  }
+  const entries = getActivityFeed({
+    since: req.query.since,
+    limit: req.query.limit,
+    includeHidden: req.query.includeHidden === 'true',
+  });
   // Polling clients only need summary rows here; detailed steps stay on the per-entry route.
-  const slim = entries.slice(0, limit).map(e => ({
+  const slim = entries.map(e => ({
     ...e,
     stepCount: e.steps?.length || 0,
     steps: undefined,
@@ -33,6 +28,7 @@ router.get('/activity-log/:id', (req, res) => {
 router.delete('/activity-log', (req, res) => {
   const activityLog = getActivityLog();
   activityLog.length = 0;
+  persistActivityLog();
   res.json({ success: true });
 });
 
@@ -40,6 +36,7 @@ router.delete('/activity-log/:id', (req, res) => {
   const activityLog = getActivityLog();
   const idx = activityLog.findIndex(e => e.id === req.params.id);
   if (idx >= 0) activityLog.splice(idx, 1);
+  persistActivityLog();
   res.json({ success: true });
 });
 

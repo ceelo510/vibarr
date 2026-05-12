@@ -11,12 +11,19 @@ const { SLSKD_HOST, SLSKD_API_KEY, LIDARR_HOST, LIDARR_API_KEY } = CONFIG;
 
 async function slskdFetch(path, options = {}) {
   const url = `${SLSKD_HOST}${path}`;
-  const resp = await fetch(url, {
-    headers: { 'X-API-Key': SLSKD_API_KEY, ...options.headers },
-    ...options,
-  });
-  if (!resp.ok) throw new Error(`SLSKD ${path} HTTP ${resp.status}`);
-  return resp.json();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10000);
+  try {
+    const resp = await fetch(url, {
+      headers: { 'X-API-Key': SLSKD_API_KEY, ...options.headers },
+      signal: controller.signal,
+      ...options,
+    });
+    if (!resp.ok) throw new Error(`SLSKD ${path} HTTP ${resp.status}`);
+    return resp.json();
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 router.get('/slskd/downloads', async (req, res) => {
@@ -225,12 +232,10 @@ export async function fetchSlskdDownloads() {
   }
 }
 
-registerInterval(setInterval(() => {
-  fetchSlskdDownloads();
-}, 10000));
+const slskdFetchInterval = setInterval(fetchSlskdDownloads, 10000);
+registerInterval(slskdFetchInterval);
 
-registerInterval(setInterval(() => {
-  processCompletedSlskdDownloads();
-}, 30000));
+const slskdProcessInterval = setInterval(processCompletedSlskdDownloads, 30000);
+registerInterval(slskdProcessInterval);
 
 export default router;

@@ -1945,6 +1945,7 @@ export default function Library({
   const inputRef = useRef(null);
   const libraryRequestRef = useRef(0);
   const lookupRequestRef = useRef(0);
+  const libraryFailureRef = useRef({ count: 0, lastGoodAt: null });
   const latestSearchRef = useRef({ query: externalQuery || '', activeType: 'all' });
 
   // Sync external header query → local query (when header search bar is typed into)
@@ -2009,6 +2010,7 @@ export default function Library({
         artists: Array.isArray(data.artists) ? data.artists : [],
       });
       setLibraryServiceStates(data.serviceStates || null);
+      libraryFailureRef.current = { count: 0, lastGoodAt: Date.now() };
     } catch (err) {
       if (requestId !== libraryRequestRef.current) return;
       const message = String(err?.message || 'Library request failed');
@@ -2018,6 +2020,20 @@ export default function Library({
         message.includes('NetworkError') ||
         message.includes('Load failed');
       const shouldRetryMessage = transientFailure || isSetupAdjacentError(err);
+      const nextFailureCount = libraryFailureRef.current.count + 1;
+      const hasLoadedSuccessfully = Boolean(libraryFailureRef.current.lastGoodAt);
+      libraryFailureRef.current = {
+        ...libraryFailureRef.current,
+        count: nextFailureCount,
+      };
+      if (transientFailure && (initialLoaded || hasLoadedSuccessfully)) {
+        setLibraryError(null);
+        return;
+      }
+      if (transientFailure && nextFailureCount < 3) {
+        setLibraryError(null);
+        return;
+      }
       setLibraryError(shouldRetryMessage
         ? Object.assign(new Error('Reconnecting to the library…'), err, { message: 'Reconnecting to the library…' })
         : err);
@@ -2027,7 +2043,7 @@ export default function Library({
         setInitialLoaded(true);
       }
     }
-  }, [hasLibraryServices]);
+  }, [hasLibraryServices, initialLoaded]);
 
   // Lookup search (add mode)
   const doLookupSearch = useCallback(async (q, type) => {

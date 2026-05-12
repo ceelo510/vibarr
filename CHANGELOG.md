@@ -1,3 +1,36 @@
+## 2026-05-12 — Suppress transient library reconnect banners
+
+**User prompt:** `why am i getting this issue so often? fix it please. make sure it never occurs.`
+
+**What was broken / what changed:**
+- The My Library view surfaced every transient failed `GET /api/library/search` poll as a red `Library Request Failed` reconnect banner, even after the library had already loaded and cached results were still usable.
+- The frontend now tracks successful library loads and consecutive transient failures. Background network/backend blips after a good load keep the current results on screen without showing the recurring red banner; first-load failures are only surfaced after repeated failure so real outages are still diagnosable.
+- The active SLSKD route now bounds SLSKD fetches with a 10s abort and registers named intervals, matching the intended helper behavior so stalled Soulseek polling cannot pin a backend interval.
+- Corrected the root pipeline helper imports so the backend can boot from the rebased modular source tree.
+- The live backend container was recreated with the existing root user override so Docker-socket reads stop failing with `EACCES` and triggering avoidable backend errors.
+
+**Files changed:**
+- `frontend/src/Library.jsx`: added `libraryFailureRef`, reset it on successful `/api/library/search`, and suppress transient poll errors after initial success.
+- `backend/src/pipeline.js`: fixed root-module relative imports used during backend boot.
+- `backend/src/routes/slskd.js`: added a 10s `AbortController` timeout around `slskdFetch` and changed anonymous SLSKD intervals into named interval handles.
+- Runtime deployment: recreated `arr-dashboard-backend-live` with `--user 0:0` to match the checked-in production override and restore Docker socket access.
+- `CHANGELOG.md`: prepended this entry.
+
+**Before excerpt:**
+```jsx
+setLibraryError(shouldRetryMessage
+  ? Object.assign(new Error('Reconnecting to the library…'), err, { message: 'Reconnecting to the library…' })
+  : err);
+```
+
+**After excerpt:**
+```jsx
+if (transientFailure && (initialLoaded || hasLoadedSuccessfully)) {
+  setLibraryError(null);
+  return;
+}
+```
+
 ## 2026-05-12 — Prevent post-install frontend freeze on startup
 
 **Goal:** stop the dashboard from getting stuck on `Loading vibarr…` after the first-run installer restarts the stack.
@@ -8,6 +41,22 @@
 
 **Files changed:**
 - `frontend/src/App.jsx`
+
+## 2026-05-12 — Stop stale queue errors from polluting the Activity panel
+
+**Goal:** user said `why is there all errors here? find it and make sure this does not happen again`.
+
+**What changed:**
+- Traced the sidebar noise to persisted Sonarr queue import-failure entries that were being restored on boot and then re-logged after backend restarts because queue alert dedupe only lived in memory.
+- Added restart-safe queue alert seeding from the restored activity log so the same `service + downloadId` error does not get emitted again after a reboot.
+- Collapsed duplicate unresolved queue-error entries while restoring the persisted log.
+- Added a visibility window for stale unresolved queue errors so the Activity sidebar keeps showing current actionable issues instead of 12-15 hour old import misses during demos.
+- Made Activity clear/dismiss actions persist immediately so cleared noise does not come back on the next restart.
+
+**Files changed:**
+- `backend/src/state.js`
+- `backend/src/pipeline.js`
+- `backend/src/routes/activity.js`
 - `CHANGELOG.md`
 
 ## 2026-05-12 — Retry npm installs during container builds

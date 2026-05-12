@@ -87,6 +87,56 @@ export function logServerEvent(level, event, fields = {}) {
 
 const activityLog = [];
 const MAX_LOG_ENTRIES = 200;
+const MAX_PERSISTED_LOG_ENTRIES = 100;
+
+function getQueueAlertIdentity(entry) {
+  if (!entry || entry.type !== 'queue') return null;
+  const service = entry.details?.service || entry.context?.service;
+  const discriminator = entry.details?.downloadId || entry.details?.queueId || null;
+  if (!service || !discriminator) return null;
+  return `${service}:${discriminator}`;
+}
+
+function dedupeQueueErrorEntries(entries) {
+  const seenQueueErrors = new Set();
+  const deduped = [];
+  for (const entry of entries) {
+    const identity = entry?.status === 'error' ? getQueueAlertIdentity(entry) : null;
+    if (identity) {
+      if (seenQueueErrors.has(identity)) continue;
+      seenQueueErrors.add(identity);
+    }
+    deduped.push(entry);
+  }
+  return deduped;
+}
+
+export function isVisibleActivityEntry(entry) {
+  if (!entry) return false;
+  // Queue import failures can linger in Sonarr/Radarr for a long time and drown out
+  // the operator-facing activity feed. Keep them available via includeHidden=true.
+  if (entry.type === 'queue' && entry.status === 'error') return false;
+  return true;
+}
+
+export function getActivityFeed({ since = null, limit = 50, includeHidden = false } = {}) {
+  const cappedLimit = Math.min(parseInt(limit, 10) || 50, 100);
+  const now = Date.now();
+  let entries = dedupeQueueErrorEntries(activityLog);
+
+  if (since) {
+    const sinceDate = new Date(since);
+    if (!isNaN(sinceDate.getTime())) {
+      entries = entries.filter(entry => new Date(entry.timestamp) > sinceDate);
+    }
+  }
+
+  if (!includeHidden) {
+    entries = entries.filter(entry => isVisibleActivityEntry(entry, now));
+  }
+
+  return entries.slice(0, cappedLimit);
+}
 
 export function getActivityLog() {
   return activityLog;
@@ -142,8 +192,8 @@ export function loadPersistedActivityLog() {
       };
     }
     activityLog.length = 0;
-    // Keep a deeper in-memory tail for the live UI, but cap the persisted file on disk.
-    activityLog.push(...parsed.slice(0, MAX_LOG_ENTRIES));
+    // Collapse restart-duplicated queue errors while keeping the newest unresolved copy.
+    activityLog.push(...dedupeQueueErrorEntries(parsed.slice(0, MAX_LOG_ENTRIES)));
     return {
       status: 'loaded',
       path: CONFIG.ACTIVITY_LOG_PATH,
@@ -388,12 +438,12 @@ export function saveBwLifetime() {
 
 export function persistActivityLog() {
   try {
-    writeFileSync(CONFIG.ACTIVITY_LOG_PATH, JSON.stringify(activityLog.slice(0, 100)));
+    writeFileSync(CONFIG.ACTIVITY_LOG_PATH, JSON.stringify(activityLog.slice(0, MAX_PERSISTED_LOG_ENTRIES)));
     if (persistenceHealth.activitySaveFailed) {
       persistenceHealth.activitySaveFailed = false;
       logServerEvent('info', 'state.activity_log_persist.recovered', {
         path: CONFIG.ACTIVITY_LOG_PATH,
-        persistedEntries: Math.min(activityLog.length, 100),
+        persistedEntries: Math.min(activityLog.length, MAX_PERSISTED_LOG_ENTRIES),
       });
     }
     return true;
@@ -401,7 +451,7 @@ export function persistActivityLog() {
     if (!persistenceHealth.activitySaveFailed) {
       logServerEvent('error', 'state.activity_log_persist.failed', {
         path: CONFIG.ACTIVITY_LOG_PATH,
-        persistedEntries: Math.min(activityLog.length, 100),
+        persistedEntries: Math.min(activityLog.length, MAX_PERSISTED_LOG_ENTRIES),
         error: summarizeError(e),
       });
     }
