@@ -459,7 +459,8 @@ async function readArrApiKeyWhenReady(containerName, url) {
   });
 }
 
-async function ensureDataDirectories(container) {
+async function ensureDataDirectories(container, setup) {
+  const owner = `${Number(setup.puid)}:${Number(setup.pgid)}`;
   await execInContainer(
     container,
     [
@@ -470,6 +471,7 @@ async function ensureDataDirectories(container) {
       'mkdir -p /data/downloads/incomplete',
       'mkdir -p /data/downloads/slskd',
       'mkdir -p /data/configs',
+      `chown -R ${owner} /data/movies /data/tv /data/music /data/downloads /data/configs`,
     ].join(' && '),
   );
 }
@@ -502,11 +504,12 @@ async function ensureRootFolder(service, host, apiKey, targetPath) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
+  const responseText = response.ok ? '' : await response.text().catch(() => '');
   if (!response.ok) {
     throw new InstallerExecutionError(`${service} root folder create failed`, {
       code: 'INSTALLER_ROOT_FOLDER_FAILED',
       publicMessage: `Setup could not create the ${service} root folder.`,
-      logDetails: { service, targetPath, status: response.status },
+      logDetails: { service, targetPath, status: response.status, responseText: responseText.slice(0, 500) },
     });
   }
 }
@@ -1094,7 +1097,7 @@ router.post('/setup/install', async (req, res) => {
 
     const qbContainer = docker.getContainer('qbittorrent');
     await waitForHttp('http://qbittorrent:8080');
-    await ensureDataDirectories(qbContainer);
+    await ensureDataDirectories(qbContainer, setup);
     await configureQbittorrent(qbContainer, {
       username: setup.qbittorrent.username,
       password: qbPassword,

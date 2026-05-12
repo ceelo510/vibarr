@@ -8,6 +8,7 @@
 - Passed `SETUP_BOOTSTRAP_TOKEN` through Compose into the backend container so the token printed by `./install.sh` is the token the setup API actually accepts.
 - Switched first-run qBittorrent credential setup from offline PBKDF2 config writes to qBittorrent's Web API: the installer now logs in with the temporary first-run admin password, saves the generated dashboard credentials through qBittorrent itself, and verifies the generated credentials before wiring Arr clients.
 - Updated qBittorrent session handling for current qBittorrent login responses, which now return a `204` with a `QBT_SID_8080` cookie instead of the older `Ok.` body and `SID` cookie.
+- Chowned the installer-created `/data` library and downloads folders to the configured PUID/PGID before creating Arr root folders, so Radarr/Sonarr/Lidarr do not reject fresh paths as unwritable.
 - Kept setup auth metadata under the setup-state `auth` object instead of treating it as a global unresolved-auth phase.
 - Fixed frontend API error message parsing so structured backend errors show their real message instead of `[object Object]`.
 
