@@ -33,6 +33,29 @@ warn()  { echo -e "${YELLOW}==>${NC} $1"; }
 err()   { echo -e "${RED}ERROR:${NC} $1" >&2; }
 step()  { echo -e "  ${DIM}$1${NC}"; }
 
+retry_command() {
+  local attempts=$1
+  local sleep_seconds=$2
+  local label=$3
+  shift 3
+
+  local attempt=1
+  local exit_code=0
+  while [ "$attempt" -le "$attempts" ]; do
+    if "$@"; then
+      return 0
+    fi
+    exit_code=$?
+    if [ "$attempt" -lt "$attempts" ]; then
+      warn "$label failed (attempt ${attempt}/${attempts}). Retrying in ${sleep_seconds}s..."
+      sleep "$sleep_seconds"
+    fi
+    attempt=$((attempt + 1))
+  done
+
+  return "$exit_code"
+}
+
 has_tty() {
   [ -t 0 ] && [ -t 1 ]
 }
@@ -377,14 +400,14 @@ cleanup() {
     err "Installation failed (exit code $exit_code)."
     echo "  Check the messages above, then inspect:"
     echo "  cd $INSTALL_DIR && $(docker_compose_label) logs -f backend frontend"
-    echo "  https://github.com/anomalyco/vibarr/issues"
+    echo "  https://github.com/ceelo510/vibarr/issues"
   fi
   exit $exit_code
 }
 trap cleanup EXIT
 
 echo
-info "vibarr installer"
+info "Vibarr installer"
 echo
 
 docker_issue=""
@@ -526,8 +549,9 @@ docker_compose config >/dev/null
 
 echo
 info "Building and starting containers"
-docker_compose build --no-cache
-docker_compose up -d --remove-orphans
+step "Docker image pulls can fail transiently on fresh VMs; the installer retries automatically."
+retry_command 4 5 "docker compose build" docker_compose build --no-cache
+retry_command 3 5 "docker compose up" docker_compose up -d --remove-orphans
 
 echo
 info "Waiting for backend health"
@@ -580,7 +604,7 @@ BANDWIDTH_LIFETIME_PATH="$(expand_path_from_install_dir "./backend/bandwidth-lif
 INSTALLER_STATE_PATH_DISPLAY="$(expand_path_from_install_dir "$INSTALLER_STATE_HOST_PATH")"
 
 echo
-info "vibarr is running"
+info "Vibarr is running"
 echo "  Dashboard: ${DASHBOARD_URL}"
 echo "  API:       ${DASHBOARD_URL}/api"
 if [ "${WEB_INSTALLER_ENABLED:-0}" -eq 1 ]; then
