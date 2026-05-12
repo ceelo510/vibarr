@@ -1,3 +1,14 @@
+## 2026-05-12 — Make frontend container builds deterministic
+
+**Goal:** stop frontend Docker builds from failing on fresh and production hosts because of npm's non-lockfile install path.
+
+**What changed:**
+- Switched the frontend Docker image build from `npm install` to `npm ci` so container builds use the committed lockfile and avoid npm's flaky resolver/install behavior on the production ARM host.
+
+**Files changed:**
+- `frontend/Dockerfile`
+- `CHANGELOG.md`
+
 ## 2026-05-12 — Leave setup after first-run install completes
 
 **Goal:** make a fresh install land in the new-user library/add flow without requiring an extra click on the Settings setup screen.
