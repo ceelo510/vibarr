@@ -5,6 +5,7 @@
 **What changed:**
 - Removed the Compose defaults that injected `admin/adminadmin` qBittorrent credentials into clean web-onboarding installs, so the dashboard no longer reports qBittorrent as `DOWN` before qBittorrent exists.
 - Added a Setup Token field to the first-run installer and sends it as the configured setup-token header on `/api/setup/install`, preventing the button from producing a 401 on the first click.
+- Passed `SETUP_BOOTSTRAP_TOKEN` through Compose into the backend container so the token printed by `./install.sh` is the token the setup API actually accepts.
 - Kept setup auth metadata under the setup-state `auth` object instead of treating it as a global unresolved-auth phase.
 - Fixed frontend API error message parsing so structured backend errors show their real message instead of `[object Object]`.
 
