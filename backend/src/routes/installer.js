@@ -1,4 +1,5 @@
 import { posix as pathPosix } from 'path';
+import { PassThrough } from 'stream';
 import { Router } from 'express';
 import Docker from 'dockerode';
 import crypto from 'crypto';
@@ -91,13 +92,6 @@ function logInstallerEvent(level, event, fields = {}) {
 
 function randomSecret(length = 20) {
   return crypto.randomBytes(length).toString('base64url').slice(0, length);
-}
-
-function qbPasswordHash(password) {
-  const salt = crypto.randomUUID({ disableEntropyCache: true });
-  const saltBytes = Buffer.from(salt.replace(/-/g, ''), 'hex');
-  const hash = crypto.pbkdf2Sync(Buffer.from(password, 'utf-8'), saltBytes, 100000, 64, 'sha512');
-  return `${saltBytes.toString('base64')}:${hash.toString('base64')}`;
 }
 
 function sanitizeServices(input = {}) {
@@ -623,36 +617,6 @@ async function configureProwlarrApplication(host, apiKey, targetService, targetA
   }
 }
 
-function qbConfigText({ username, passwordHash }) {
-  return `[BitTorrent]
-Session\\AddTorrentStopped=false
-Session\\DefaultSavePath=/data/downloads
-Session\\Port=6881
-Session\\QueueingSystemEnabled=false
-Session\\RefreshInterval=1000
-Session\\TempPath=/data/downloads/incomplete
-
-[Core]
-AutoDeleteAddedTorrentFile=Never
-
-[LegalNotice]
-Accepted=true
-
-[Meta]
-MigrationVersion=8
-
-[Preferences]
-Connection\\PortRangeMin=6881
-Downloads\\SavePath=/data/downloads/
-Downloads\\TempPath=/data/downloads/incomplete/
-WebUI\\Address=*
-WebUI\\LocalHostAuth=false
-WebUI\\Password_PBKDF2="@ByteArray(${passwordHash})"
-WebUI\\ServerDomains=*
-WebUI\\Username=${username}
-`;
-}
-
 function yamlString(value) {
   return JSON.stringify(typeof value === 'string' ? value : '');
 }
@@ -761,24 +725,162 @@ function serviceSpec(setup, service) {
   }
 }
 
-async function verifyQbCredentials(username, password) {
-  const response = await fetch('http://qbittorrent:8080/api/v2/auth/login', {
+function qbCookiePair(setCookieHeader) {
+  return setCookieHeader?.split(';')?.[0]?.trim() || '';
+}
+
+function qbLoginSucceeded(response, text) {
+  const trimmed = text.trim();
+  if (!response.ok) return false;
+  return response.status === 204 ? trimmed === '' : trimmed === 'Ok.';
+}
+
+async function qbLogin(host, username, password, errorOptions = {}) {
+  const response = await fetch(`${host}/api/v2/auth/login`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
-      Origin: 'http://qbittorrent:8080',
-      Referer: 'http://qbittorrent:8080',
+      Origin: host,
+      Referer: `${host}/`,
     },
     body: `username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`,
   });
   const text = await response.text();
-  if (!response.ok || text.trim() !== 'Ok.') {
-    throw new InstallerExecutionError('qBittorrent credential verification failed', {
-      code: 'INSTALLER_QBIT_AUTH_FAILED',
-      publicMessage: 'Setup could not verify the generated qBittorrent credentials.',
+  const cookie = qbCookiePair(response.headers.get('set-cookie'));
+  if (!qbLoginSucceeded(response, text) || !cookie) {
+    throw new InstallerExecutionError(errorOptions.message || 'qBittorrent login failed', {
+      code: errorOptions.code || 'INSTALLER_QBIT_AUTH_FAILED',
+      publicMessage: errorOptions.publicMessage || 'Setup could not verify the generated qBittorrent credentials.',
       logDetails: { status: response.status, responseText: text.trim() },
     });
   }
+  return cookie;
+}
+
+async function qbSetPreferences(host, cookie, preferences) {
+  const body = new URLSearchParams({ json: JSON.stringify(preferences) });
+  const response = await fetch(`${host}/api/v2/app/setPreferences`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Cookie: cookie,
+      Origin: host,
+      Referer: `${host}/`,
+    },
+    body,
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    throw new InstallerExecutionError('qBittorrent preference update failed', {
+      code: 'INSTALLER_QBIT_CONFIG_FAILED',
+      publicMessage: 'Setup could not save qBittorrent preferences.',
+      logDetails: { status: response.status, responseText: text.trim() },
+    });
+  }
+}
+
+async function readContainerLogs(container, tail = 200) {
+  const logs = await container.logs({
+    stdout: true,
+    stderr: true,
+    tail,
+    follow: false,
+  });
+  if (Buffer.isBuffer(logs)) return logs.toString('utf-8');
+
+  let output = '';
+  await new Promise((resolve, reject) => {
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    stdout.on('data', (chunk) => { output += chunk.toString('utf-8'); });
+    stderr.on('data', (chunk) => { output += chunk.toString('utf-8'); });
+    streamForwardErrors(logs, stdout, stderr, reject);
+    logs.on('end', resolve);
+    docker.modem.demuxStream(logs, stdout, stderr);
+  });
+  return output;
+}
+
+function streamForwardErrors(input, stdout, stderr, reject) {
+  input.on('error', reject);
+  stdout.on('error', reject);
+  stderr.on('error', reject);
+}
+
+function latestQbTemporaryPassword(logs) {
+  const matches = [...logs.matchAll(/temporary password is provided for this session:\s*(\S+)/gi)];
+  return matches.length > 0 ? matches[matches.length - 1][1] : '';
+}
+
+async function readQbTemporaryPasswordWhenReady(container, { timeoutMs = 30000, stepMs = 1000 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const password = latestQbTemporaryPassword(await readContainerLogs(container));
+    if (password) return password;
+    await new Promise((resolve) => setTimeout(resolve, stepMs));
+  }
+  return '';
+}
+
+async function configureQbittorrent(container, qbConfig) {
+  const host = 'http://qbittorrent:8080';
+  const preferences = {
+    web_ui_username: qbConfig.username,
+    web_ui_password: qbConfig.password,
+    web_ui_host_header_validation_enabled: false,
+    bypass_local_auth: false,
+    save_path: '/data/downloads/',
+    temp_path_enabled: true,
+    temp_path: '/data/downloads/incomplete/',
+    start_paused_enabled: false,
+    queueing_enabled: false,
+  };
+
+  try {
+    const cookie = await qbLogin(host, qbConfig.username, qbConfig.password);
+    await qbSetPreferences(host, cookie, preferences);
+  } catch {
+    const temporaryPassword = await readQbTemporaryPasswordWhenReady(container);
+    const candidates = [
+      temporaryPassword ? { username: 'admin', password: temporaryPassword, source: 'temporary' } : null,
+      { username: 'admin', password: 'adminadmin', source: 'legacy-default' },
+    ].filter(Boolean);
+
+    let configured = false;
+    const failures = [];
+    for (const candidate of candidates) {
+      try {
+        const cookie = await qbLogin(host, candidate.username, candidate.password, {
+          code: 'INSTALLER_QBIT_BOOTSTRAP_AUTH_FAILED',
+          message: 'qBittorrent bootstrap login failed',
+          publicMessage: 'Setup could not access the qBittorrent first-run session.',
+        });
+        await qbSetPreferences(host, cookie, preferences);
+        configured = true;
+        break;
+      } catch (error) {
+        failures.push({ source: candidate.source, message: error.message, code: error.code });
+      }
+    }
+
+    if (!configured) {
+      throw new InstallerExecutionError('qBittorrent bootstrap credentials were not accepted', {
+        code: 'INSTALLER_QBIT_BOOTSTRAP_AUTH_FAILED',
+        publicMessage: 'Setup could not access the qBittorrent first-run session.',
+        logDetails: { failures, temporaryPasswordFound: Boolean(temporaryPassword) },
+      });
+    }
+  }
+
+  await verifyQbCredentials(qbConfig.username, qbConfig.password);
+}
+
+async function verifyQbCredentials(username, password) {
+  await qbLogin('http://qbittorrent:8080', username, password, {
+    code: 'INSTALLER_QBIT_AUTH_FAILED',
+    message: 'qBittorrent credential verification failed',
+    publicMessage: 'Setup could not verify the generated qBittorrent credentials.',
+  });
 }
 
 function toUserSafeInstallError(error, phase) {
@@ -952,7 +1054,6 @@ router.post('/setup/install', async (req, res) => {
 
   let state = ensureSetupBootstrapToken();
   const qbPassword = setup.qbittorrent.password || randomSecret(20);
-  const qbPasswordDigest = qbPasswordHash(qbPassword);
   const slskApiKey = randomSecret(32);
   const slskWebPassword = setup.slskd.webPassword || randomSecret(18);
   const warnings = [];
@@ -994,14 +1095,10 @@ router.post('/setup/install', async (req, res) => {
     const qbContainer = docker.getContainer('qbittorrent');
     await waitForHttp('http://qbittorrent:8080');
     await ensureDataDirectories(qbContainer);
-    await writeContainerFile(
-      qbContainer,
-      '/config/qBittorrent/qBittorrent.conf',
-      qbConfigText({ username: setup.qbittorrent.username, passwordHash: qbPasswordDigest }),
-    );
-    await restartContainer(qbContainer);
-    await waitForHttp('http://qbittorrent:8080');
-    await verifyQbCredentials(setup.qbittorrent.username, qbPassword);
+    await configureQbittorrent(qbContainer, {
+      username: setup.qbittorrent.username,
+      password: qbPassword,
+    });
 
     if (setup.services.slskd) {
       const slskdContainer = docker.getContainer('slskd');

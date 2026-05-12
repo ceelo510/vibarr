@@ -138,19 +138,20 @@ export async function qbittorrentLogin(forceRefresh = false) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
-        'Referer': qbHost,
+        'Referer': `${qbHost}/`,
         'Origin': qbHost,
       },
       body: 'username=' + encodeURIComponent(qbUser) + '&password=' + encodeURIComponent(qbPass)
     });
+    const loginBody = await loginResponse.text();
+    const loginText = loginBody.trim();
     if (!loginResponse.ok) {
       throw new Error('qBittorrent returned HTTP ' + loginResponse.status + ' - is ' + qbHost + ' reachable?');
     }
-    const loginBody = await loginResponse.text();
-    if (loginBody.trim() !== 'Ok.') {
+    if (loginResponse.status === 204 ? loginText !== '' : loginText !== 'Ok.') {
       throw new Error('Authentication rejected by qBittorrent (user: ' + qbUser + '). Check QBITTORRENT_USER and QBITTORRENT_PASS.');
     }
-    const cookie = loginResponse.headers.get('set-cookie');
+    const cookie = loginResponse.headers.get('set-cookie')?.split(';')?.[0]?.trim();
     if (!cookie) {
       throw new Error('qBittorrent login succeeded but no session cookie returned');
     }
@@ -181,7 +182,7 @@ async function qbRequest(path, options = {}, forceRefresh = false) {
       signal: controller.signal,
       headers: {
         Cookie: cookie,
-        Referer: qbHost,
+        Referer: `${qbHost}/`,
         ...headers,
       },
     });

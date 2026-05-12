@@ -6,12 +6,15 @@
 - Removed the Compose defaults that injected `admin/adminadmin` qBittorrent credentials into clean web-onboarding installs, so the dashboard no longer reports qBittorrent as `DOWN` before qBittorrent exists.
 - Added a Setup Token field to the first-run installer and sends it as the configured setup-token header on `/api/setup/install`, preventing the button from producing a 401 on the first click.
 - Passed `SETUP_BOOTSTRAP_TOKEN` through Compose into the backend container so the token printed by `./install.sh` is the token the setup API actually accepts.
+- Switched first-run qBittorrent credential setup from offline PBKDF2 config writes to qBittorrent's Web API: the installer now logs in with the temporary first-run admin password, saves the generated dashboard credentials through qBittorrent itself, and verifies the generated credentials before wiring Arr clients.
+- Updated qBittorrent session handling for current qBittorrent login responses, which now return a `204` with a `QBT_SID_8080` cookie instead of the older `Ok.` body and `SID` cookie.
 - Kept setup auth metadata under the setup-state `auth` object instead of treating it as a global unresolved-auth phase.
 - Fixed frontend API error message parsing so structured backend errors show their real message instead of `[object Object]`.
 
 **Files changed:**
 - `docker-compose.yml`
 - `backend/src/routes/installer.js`
+- `backend/src/utils.js`
 - `frontend/src/App.jsx`
 - `frontend/src/api.js`
 - `CHANGELOG.md`
