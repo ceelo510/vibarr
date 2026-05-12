@@ -1,3 +1,18 @@
+## 2026-05-11 — Fix public clone URL and add doc URL guard
+
+**Goal:** stop the public docs from ever pointing users at an unrelated GitHub owner again.
+
+**What changed:**
+- Fixed the public `README.md` quick-start clone target from `anomalyco/vibarr` to `ceelo510/vibarr`.
+- Added canonical-repository guidance to both `README.md` and `SETUP.md` so owner swaps are explicit for private forks.
+- Added a CI docs check that derives the canonical repo URL from `origin` and fails if the docs contain a different concrete `github.com/<owner>/vibarr.git` or raw GitHub Vibarr URL, except for the documented `YOUR_GITHUB_USERNAME` placeholder.
+
+**Files changed:**
+- `README.md`
+- `SETUP.md`
+- `.github/workflows/ci.yml`
+- `CHANGELOG.md`
+
 ## 2026-05-11 — Harden onboarding release and live dashboard integrations
 
 **Goal:** make the open-source onboarding path reliable on fresh installs while keeping the live vibarr deployment stable against real Arr, qBittorrent, and SLSKD behavior.

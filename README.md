@@ -7,10 +7,20 @@ vibarr runs as two containers:
 
 `docker-compose.yml` mounts the backend `docker.sock` for container management and proxies `/api/*` from the frontend to the backend.
 
+## Canonical repository
+
+The canonical public repository for this project is:
+
+```bash
+https://github.com/ceelo510/vibarr.git
+```
+
+If you publish your own private fork or mirror, replace the GitHub owner in the clone commands below with your own repository path.
+
 ## Quick start
 
 ```bash
-git clone https://github.com/anomalyco/vibarr.git
+git clone https://github.com/ceelo510/vibarr.git
 cd vibarr
 ./install.sh
 ```

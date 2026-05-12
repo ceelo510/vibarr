@@ -7,6 +7,43 @@ on:
     branches: [main, master]
 
 jobs:
+  docs:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reject stale repository URLs in docs
+        shell: bash
+        run: |
+          set -euo pipefail
+          origin_url="$(git remote get-url origin)"
+          canonical_url="${origin_url%.git}"
+          canonical_url="${canonical_url/git@github.com:/https://github.com/}"
+          canonical_url="${canonical_url}.git"
+          allowed_placeholder='https://github.com/YOUR_GITHUB_USERNAME/vibarr.git'
+          scan_paths=()
+          for path in README.md SETUP.md CONTRIBUTING.md docs .env.example install.sh .github; do
+            if [ -e "$path" ]; then
+              scan_paths+=("$path")
+            fi
+          done
+
+          matches="$(grep -RInE 'https://github\.com/[^/]+/vibarr\.git|https://raw\.githubusercontent\.com/[^/]+/vibarr/' "${scan_paths[@]}" || true)"
+
+          if [ -z "$matches" ]; then
+            exit 0
+          fi
+
+          bad_matches="$(printf '%s\n' "$matches" | grep -vF "$canonical_url" | grep -vF "$allowed_placeholder" || true)"
+
+          if [ -n "$bad_matches" ]; then
+            echo "Found stale or non-canonical repository URLs:"
+            printf '%s\n' "$bad_matches"
+            echo "Canonical URL is: $canonical_url"
+            exit 1
+          fi
+
   frontend:
     runs-on: ubuntu-latest
     defaults:

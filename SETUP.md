@@ -1,5 +1,23 @@
 # Setup Notes
 
+## Canonical repository
+
+The public repository this guide refers to is:
+
+```bash
+https://github.com/ceelo510/vibarr.git
+```
+
+If you are using your own private fork or mirror, swap the GitHub owner in the clone commands you share with collaborators. The install flow stays the same.
+
+## Quick start
+
+```bash
+git clone https://github.com/ceelo510/vibarr.git
+cd vibarr
+./install.sh
+```
+
 ## Supported bootstrap paths
 
 ### 1. Web onboarding-first
