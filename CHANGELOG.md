@@ -1,9 +1,26 @@
+## 2026-05-11 — Fix first-run setup token and qB status UX
+
+**Goal:** make the clean-VM onboarding UI match the installer contract before users click `Install Stack`.
+
+**What changed:**
+- Removed the Compose defaults that injected `admin/adminadmin` qBittorrent credentials into clean web-onboarding installs, so the dashboard no longer reports qBittorrent as `DOWN` before qBittorrent exists.
+- Added a Setup Token field to the first-run installer and sends it as the configured setup-token header on `/api/setup/install`, preventing the button from producing a 401 on the first click.
+- Kept setup auth metadata under the setup-state `auth` object instead of treating it as a global unresolved-auth phase.
+- Fixed frontend API error message parsing so structured backend errors show their real message instead of `[object Object]`.
+
+**Files changed:**
+- `docker-compose.yml`
+- `backend/src/routes/installer.js`
+- `frontend/src/App.jsx`
+- `frontend/src/api.js`
+- `CHANGELOG.md`
+
 ## 2026-05-11 — Fix public clone URL and add doc URL guard
 
 **Goal:** stop the public docs from ever pointing users at an unrelated GitHub owner again.
 
 **What changed:**
-- Fixed the public `README.md` quick-start clone target from `anomalyco/vibarr` to `ceelo510/vibarr`.
+- Fixed the public `README.md` quick-start clone target from the wrong owner to `ceelo510/vibarr`.
 - Added canonical-repository guidance to both `README.md` and `SETUP.md` so owner swaps are explicit for private forks.
 - Added a CI docs check that derives the canonical repo URL from `origin` and fails if the docs contain a different concrete `github.com/<owner>/vibarr.git` or raw GitHub Vibarr URL, except for the documented `YOUR_GITHUB_USERNAME` placeholder.
 

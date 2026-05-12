@@ -920,7 +920,7 @@ router.get('/setup/state', async (req, res) => {
     selectedServices: publicState.selectedServices,
     warnings: publicState.warnings,
     lastInstallError: publicState.lastInstallError,
-    authRequired: installerEnabled,
+    authRequired: false,
     auth: {
       required: installerEnabled,
       tokenHeader: authState?.tokenHeader || 'X-Setup-Token',

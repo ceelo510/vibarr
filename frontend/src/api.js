@@ -37,9 +37,21 @@ function toRetryAfterMs(value) {
 function normalizeMessage(payload, status) {
   if (typeof payload === 'string') return payload.trim() || `HTTP ${status}`;
   if (payload && typeof payload === 'object') {
+    if (payload.error && typeof payload.error === 'object') {
+      return String(
+        firstDefined(
+          payload.error.message,
+          payload.error.detail,
+          payload.error.details,
+          payload.error.title,
+          payload.error.reason,
+          payload.error.code,
+        ) || `HTTP ${status}`,
+      );
+    }
     return String(
       firstDefined(
-        payload.error,
+        typeof payload.error === 'string' ? payload.error : undefined,
         payload.message,
         payload.detail,
         payload.details,
@@ -310,10 +322,14 @@ export async function apiFetch(url, options = {}) {
  * @param {Object} [data] - Request body to JSON-serialize
  * @returns {Promise<any>}
  */
-export async function apiPost(url, data) {
+export async function apiPost(url, data, options = {}) {
   return apiFetch(url, {
+    ...options,
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(options.headers || {}),
+    },
     body: data !== undefined ? JSON.stringify(data) : undefined,
   });
 }
