@@ -1,5 +1,15 @@
 # vibarr
 
+CEELO's Note: 
+
+Vibarr is a vibeslopped system designed to make media curation effortless. I am deeply interested in preserving media and true ownership over your media in it's purest format. I got tired of the headaches that came from manually trying to install specific episodes or whole collections of TV shows, and having to jump through different websites to get it to work. Vibarr brings TV, Movies and Music all together in one platform. This way, you can effortlessly get true Lossless files accross all your content types and can even help Seed and spread the joy. 
+
+This project has been authored by Claude and Codex throughout its entire journey. It started off as a personal project, that I eventually understood I can share to anyone else interested. I was not aware of the development of other projects such as Seerr, or Buildarr-- so I guess they exist, but this is to be more "independent" of these. This is just my take from the ground up of how to automate these great tools. As of May 12th, 2026 this is an incredibly early public build, intended for my friends and anyone who might randomly come accross this. Enjoy and leave feedback for me to manually review! 
+
+Final Note:
+Vibarr is intended to be used as a first time install on your system, assuming no other *Arr and Servarr applications have been installed prior. It assumes the user has already configured their VPN and assumes all the responsibility behind it on the user. Personally, I combine this with both Tailscale & Mullvad to ensure secure, remote access from anywhere in the world. I will touch on that more in future documentation but for now, assume that Vibarr is strictly for downloading files and handles nothing else. 
+
+## Vibeslopped Notes: 
 vibarr runs as two containers:
 
 - `vibarr-backend` (Express API) on internal port `3000`
