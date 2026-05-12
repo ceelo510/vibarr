@@ -5,7 +5,17 @@ WORKDIR /app
 
 COPY package*.json ./
 
-RUN npm ci --omit=dev
+RUN set -eu; \
+    attempt=1; \
+    while true; do \
+        npm ci --omit=dev && break; \
+        if [ "$attempt" -ge 5 ]; then \
+            exit 1; \
+        fi; \
+        attempt=$((attempt + 1)); \
+        npm cache clean --force; \
+        sleep 5; \
+    done
 
 FROM node:22-alpine
 

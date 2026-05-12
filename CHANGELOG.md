@@ -1,3 +1,16 @@
+## 2026-05-12 — Retry npm installs during container builds
+
+**Goal:** keep fresh-VM and production Docker builds from failing on transient npm registry and DNS errors.
+
+**What changed:**
+- Wrapped both backend and frontend Dockerfile dependency installs in bounded retry loops.
+- Each retry clears npm's cache and waits briefly before trying again, which hardens installs against transient `EAI_AGAIN` and related network failures that were collapsing into npm's `Exit handler never called!` error path.
+
+**Files changed:**
+- `backend/Dockerfile`
+- `frontend/Dockerfile`
+- `CHANGELOG.md`
+
 ## 2026-05-12 — Make frontend container builds deterministic
 
 **Goal:** stop frontend Docker builds from failing on fresh and production hosts because of npm's non-lockfile install path.

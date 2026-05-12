@@ -4,7 +4,17 @@ USER root
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm ci
+RUN set -eu; \
+    attempt=1; \
+    while true; do \
+        npm ci && break; \
+        if [ "$attempt" -ge 5 ]; then \
+            exit 1; \
+        fi; \
+        attempt=$((attempt + 1)); \
+        npm cache clean --force; \
+        sleep 5; \
+    done
 
 COPY . .
 RUN npm run build
