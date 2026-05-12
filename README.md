@@ -31,7 +31,7 @@ On Ubuntu/Debian-like systems, `install.sh` can now install Docker Engine and th
 
 ## Setup modes
 
-- `INSTALLER_ENABLED=true` is the default clean-VM path. Leave `RADARR_API_KEY`, `SONARR_API_KEY`, and `LIDARR_API_KEY` blank, start the stack, open the dashboard root URL, then finish setup from the in-app Settings view.
+- `INSTALLER_ENABLED=true` is the default clean-VM path. Leave `RADARR_API_KEY`, `SONARR_API_KEY`, `LIDARR_API_KEY`, and `SLSKD_API_KEY` blank, start the stack, open the dashboard root URL, then finish setup from the in-app Settings view.
 - `INSTALLER_ENABLED=false` is the manual path. Set the Arr API keys in `.env` before startup and treat the dashboard as a client for an already-running stack.
 
 ## Compose files
@@ -49,9 +49,9 @@ docker compose -f docker-compose.yml -f docker-compose.production-host.yml up -d
 - On Ubuntu/Debian-like systems, `install.sh` offers a one-stop Docker bootstrap path if Docker is missing or broken and `sudo` is available.
 - Compose creates or reuses the named bridge network from `ARR_NETWORK_NAME` automatically. There is no external-network precreate step anymore.
 - `install.sh` seeds `backend/activity-log.json`, `backend/bandwidth-lifetime.json`, and `backend/installer-state.json` with valid JSON if they are missing or empty.
-- When web onboarding is enabled, `install.sh` also preserves or generates `SETUP_BOOTSTRAP_TOKEN`, writes it to `.env`, and prints it in the final success output so you can unlock setup immediately.
 - The backend stays internal-only on port `3000`; the public entry point is the frontend on `DASHBOARD_PORT` (default `8888`).
 - The setup UI is the dashboard root URL. There is no standalone frontend `/setup` route.
+- The in-app installer selects Radarr, Sonarr, Lidarr, Prowlarr, qBittorrent, and SLSKD by default on clean VMs.
 - If the installer had to add your user to the `docker` group, it may keep using `sudo docker compose` in the current shell until you re-login or run `newgrp docker`.
 
 ## Logs and state
@@ -61,7 +61,6 @@ docker compose -f docker-compose.yml -f docker-compose.production-host.yml up -d
 - Installer state: `backend/installer-state.json`
 - Activity log persistence: `backend/activity-log.json`
 - Bandwidth lifetime persistence: `backend/bandwidth-lifetime.json`
-- Setup token: `.env` as `SETUP_BOOTSTRAP_TOKEN`
 - Nginx setup/install request logs: `docker compose exec frontend tail -f /var/log/nginx/access.log /var/log/nginx/error.log`
 
 ## Endpoint notes

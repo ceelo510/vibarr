@@ -290,35 +290,6 @@ resolve_dashboard_port() {
   printf '%s\n' "$DEFAULT_DASHBOARD_PORT"
 }
 
-resolve_setup_bootstrap_token() {
-  local setup_token
-  setup_token="$(read_env_value "SETUP_BOOTSTRAP_TOKEN")"
-  setup_token="${setup_token//$'\r'/}"
-  printf '%s\n' "$setup_token"
-}
-
-generate_setup_bootstrap_token() {
-  od -An -N24 -tx1 /dev/urandom | tr -d ' \n'
-  printf '\n'
-}
-
-ensure_setup_bootstrap_token() {
-  local setup_token
-  if [ "${WEB_INSTALLER_ENABLED:-0}" -ne 1 ]; then
-    SETUP_BOOTSTRAP_TOKEN=""
-    return 0
-  fi
-
-  setup_token="$(resolve_setup_bootstrap_token)"
-  if [ -z "$setup_token" ]; then
-    setup_token="$(generate_setup_bootstrap_token)"
-    set_env_value "SETUP_BOOTSTRAP_TOKEN" "$setup_token"
-    step "Generated setup bootstrap token"
-  fi
-
-  SETUP_BOOTSTRAP_TOKEN="$setup_token"
-}
-
 ensure_json_file() {
   local file_path=$1
   local default_json=$2
@@ -534,8 +505,6 @@ else
   step "Configuration saved to .env"
 fi
 
-ensure_setup_bootstrap_token
-
 ensure_json_file "backend/activity-log.json" "$DEFAULT_ACTIVITY_LOG_JSON"
 ensure_json_file "backend/bandwidth-lifetime.json" "$DEFAULT_BANDWIDTH_LIFETIME_JSON"
 if [ -z "${INSTALLER_STATE_HOST_PATH:-}" ]; then
@@ -609,8 +578,6 @@ echo "  Dashboard: ${DASHBOARD_URL}"
 echo "  API:       ${DASHBOARD_URL}/api"
 if [ "${WEB_INSTALLER_ENABLED:-0}" -eq 1 ]; then
   echo "  Setup:     ${DASHBOARD_URL} (open Settings to continue onboarding)"
-  echo "  Token:     ${SETUP_BOOTSTRAP_TOKEN} (saved in .env as SETUP_BOOTSTRAP_TOKEN)"
-  echo "             Enter this token when the onboarding flow asks for setup access."
 fi
 echo "  Backend:   internal-only (proxied through the frontend)"
 echo

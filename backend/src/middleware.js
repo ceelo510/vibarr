@@ -1,14 +1,9 @@
 import express from 'express';
-import { AppError, SetupAuthError } from './errors.js';
+import { AppError } from './errors.js';
 import { CONFIG } from './config.js';
-import { ensureSetupBootstrapToken } from './installerState.js';
 import { clearAllIntervals, persistActivityLog, saveBwLifetime, clearFakeTorrentCheckInterval } from './state.js';
 
 const DEFAULT_ALLOWED_HEADERS = ['Content-Type', 'X-Api-Key'];
-
-function isMutatingSetupRequest(req) {
-  return req.path.startsWith('/api/setup/') && !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
-}
 
 function redactLogValue(value) {
   if (Array.isArray(value)) return value.map(redactLogValue);
@@ -21,19 +16,6 @@ function redactLogValue(value) {
   }));
 }
 
-function logSetupRejection(reason, req, details = {}) {
-  console.warn(JSON.stringify({
-    scope: 'setup-auth',
-    event: 'request_rejected',
-    reason,
-    method: req.method,
-    path: req.path,
-    ip: req.ip || req.connection?.remoteAddress || 'unknown',
-    details: redactLogValue(details),
-    at: new Date().toISOString(),
-  }));
-}
-
 export function bodyLimitMiddleware(app) {
   app.use(express.json({ limit: '1mb' }));
   app.use(express.urlencoded({ extended: true, limit: '1mb' }));
@@ -43,8 +25,7 @@ export function corsMiddleware(app) {
   app.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    const setupHeader = ensureSetupBootstrapToken().setupAuth?.tokenHeader || 'X-Setup-Token';
-    res.setHeader('Access-Control-Allow-Headers', [...new Set([...DEFAULT_ALLOWED_HEADERS, setupHeader])].join(', '));
+    res.setHeader('Access-Control-Allow-Headers', DEFAULT_ALLOWED_HEADERS.join(', '));
     if (req.method === 'OPTIONS') return res.sendStatus(204);
     next();
   });
@@ -79,18 +60,6 @@ export function rateLimitMiddleware(req, res, next) {
   requestCounts.set(ip, entry);
   if (entry.count > RATE_LIMIT_MAX) {
     return res.status(429).json({ error: 'Too many requests', retryAfter: Math.ceil((entry.resetAt - now) / 1000) });
-  }
-  if (isMutatingSetupRequest(req) && CONFIG.INSTALLER_ENABLED) {
-    const authState = ensureSetupBootstrapToken().setupAuth;
-    const suppliedToken = req.get(authState?.tokenHeader || 'X-Setup-Token');
-    if (!suppliedToken) {
-      logSetupRejection('missing_setup_token', req, { header: authState?.tokenHeader || 'X-Setup-Token' });
-      return next(new SetupAuthError('missing', { header: authState?.tokenHeader || 'X-Setup-Token' }));
-    }
-    if (suppliedToken !== authState?.bootstrapToken) {
-      logSetupRejection('invalid_setup_token', req, { header: authState?.tokenHeader || 'X-Setup-Token' });
-      return next(new SetupAuthError('invalid', { header: authState?.tokenHeader || 'X-Setup-Token' }));
-    }
   }
   next();
 }

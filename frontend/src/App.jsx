@@ -347,16 +347,6 @@ const PHASE_SETUP = new Set([
   'blocked',
   'error',
 ]);
-const PHASE_AUTH = new Set([
-  'awaiting_auth',
-  'auth_required',
-  'awaiting_setup_token',
-  'setup_token_required',
-  'waiting_for_auth',
-  'waiting_for_setup_token',
-  'login_required',
-]);
-
 function firstDefined(...values) {
   for (const value of values) {
     if (value !== undefined && value !== null && value !== '') return value;
@@ -442,25 +432,12 @@ function getSetupFlowState(statusData, setupState) {
     setupState?.needsSetup,
     statusData?.needsSetup,
   ) ?? false;
-  const setupTokenRequired = firstBoolean(
-    setupState?.setupTokenRequired,
-    statusData?.setupTokenRequired,
-    setupState?.requiresSetupToken,
-    statusData?.requiresSetupToken,
-  ) ?? false;
-  const authRequired = firstBoolean(
-    setupState?.authRequired,
-    statusData?.authRequired,
-    setupState?.requiresAuth,
-    statusData?.requiresAuth,
-  ) ?? false;
   const restartPending = firstBoolean(
     setupState?.restartPending,
     statusData?.restartPending,
     setupState?.restartScheduled,
     statusData?.restartScheduled,
   ) ?? false;
-  const phaseRequiresAuth = PHASE_AUTH.has(normalizedPhase) || /auth|token/.test(normalizedPhase);
   const phaseInProgress = PHASE_PROGRESS.has(normalizedPhase);
   const phaseNeedsSetup = PHASE_SETUP.has(normalizedPhase);
   const phaseReady = PHASE_READY.has(normalizedPhase);
@@ -469,18 +446,15 @@ function getSetupFlowState(statusData, setupState) {
     explicitReady !== false &&
     !setupRequired &&
     !phaseNeedsSetup &&
-    !phaseRequiresAuth &&
     !restartPending
   );
-  const needsSetup = setupRequired || phaseNeedsSetup || phaseRequiresAuth || authRequired || setupTokenRequired || restartPending || explicitReady === false;
+  const needsSetup = setupRequired || phaseNeedsSetup || restartPending || explicitReady === false;
   return {
     ready,
     needsSetup,
     shouldStayInSetup: !ready && (needsSetup || phaseInProgress),
     phaseLabel: humanizePhase(rawPhase),
     phaseInProgress,
-    authRequired: authRequired || phaseRequiresAuth || setupTokenRequired,
-    setupTokenRequired,
     restartPending,
     manualConfigOnly: needsSetup && setupState?.installerEnabled === false,
   };
@@ -550,7 +524,7 @@ function buildSetupForm(setupState) {
       lidarr: seed.services?.lidarr ?? true,
       prowlarr: seed.services?.prowlarr ?? true,
       qbittorrent: seed.services?.qbittorrent ?? true,
-      slskd: seed.services?.slskd ?? false,
+      slskd: seed.services?.slskd ?? true,
     },
     qbittorrent: {
       username: seed.qbittorrent?.username || 'server',
@@ -586,21 +560,10 @@ function SetupPanel({
   const installerEnabled = setupState?.installerEnabled !== false;
   const serviceOrder = ['radarr', 'sonarr', 'lidarr', 'prowlarr', 'qbittorrent', 'slskd'];
   const [form, setForm] = useState(() => buildSetupForm(setupState));
-  const [setupToken, setSetupToken] = useState(() => {
-    try {
-      return sessionStorage.getItem('vibarrSetupToken') || '';
-    } catch {
-      return '';
-    }
-  });
   const initializedRef = useRef(false);
   const conflicts = firstDefined(setupState?.validation?.conflicts, setupState?.conflicts, []);
   const showInstaller = setupFlow.shouldStayInSetup && installerEnabled && !setupState?.managed;
   const canBootstrap = setupState?.canBootstrap !== false;
-  const setupAuth = setupState?.auth && typeof setupState.auth === 'object' ? setupState.auth : {};
-  const setupAuthRequired = showInstaller && installerEnabled && setupAuth.required === true;
-  const setupTokenHeader = setupAuth.tokenHeader || 'X-Setup-Token';
-  const missingSetupToken = setupAuthRequired && !setupToken.trim();
   const selectedServices = useMemo(() => Object.entries(form.services).filter(([, enabled]) => enabled).map(([name]) => name), [form.services]);
   const selectedLibraryServices = useMemo(() => LIBRARY_SERVICE_NAMES.filter((name) => form.services[name]), [form.services]);
   const selectedLibraryCount = selectedLibraryServices.length;
@@ -653,28 +616,7 @@ function SetupPanel({
     statusData?.warnings,
     statusData?.warning,
   );
-  const authHints = collectTextEntries(
-    setupState?.authMessage,
-    setupState?.setupTokenMessage,
-    setupState?.installer?.authMessage,
-    statusData?.authMessage,
-    statusData?.setupTokenMessage,
-  );
-  const authServices = collectTextEntries(
-    setupState?.pendingAuthServices,
-    setupState?.authServices,
-    statusData?.pendingAuthServices,
-    statusData?.authServices,
-  );
-  const setupTokenValue = firstDefined(
-    setupState?.setupToken,
-    setupState?.setupTokenUrl,
-    setupState?.authUrl,
-    statusData?.setupToken,
-    statusData?.setupTokenUrl,
-    statusData?.authUrl,
-  );
-  const hasBlockingIssues = noLibrarySelected || selectedServiceConflicts.length > 0 || selectedValidationIssues.length > 0 || missingSetupToken;
+  const hasBlockingIssues = noLibrarySelected || selectedServiceConflicts.length > 0 || selectedValidationIssues.length > 0;
   const continueDisabled = awaitingBackendRestart || installing || setupFlow.shouldStayInSetup;
 
   useEffect(() => {
@@ -692,14 +634,6 @@ function SetupPanel({
     });
   };
 
-  const updateSetupToken = (value) => {
-    setSetupToken(value);
-    try {
-      if (value.trim()) sessionStorage.setItem('vibarrSetupToken', value.trim());
-      else sessionStorage.removeItem('vibarrSetupToken');
-    } catch {}
-  };
-
   const toggleService = (name) => {
     setForm(prev => ({
       ...prev,
@@ -711,12 +645,11 @@ function SetupPanel({
   };
 
   const handleInstall = () => {
-    if (missingSetupToken) return;
     onInstall({
       ...form,
       puid: Number(form.puid) || 1000,
       pgid: Number(form.pgid) || 1000,
-    }, setupToken.trim(), setupTokenHeader);
+    });
   };
 
   return (
@@ -737,9 +670,7 @@ function SetupPanel({
               <h1 style={{ fontSize: 30, lineHeight: 1.08, fontWeight: 800, letterSpacing: '-0.03em', marginBottom: 12 }}>
                 {showInstaller
                   ? 'Install the media stack from here.'
-                  : setupFlow.authRequired
-                    ? 'Finish the pending service authentication.'
-                    : setupFlow.manualConfigOnly
+                  : setupFlow.manualConfigOnly
                       ? 'Finish setup from the backend environment.'
                       : setupFlow.phaseInProgress || awaitingBackendRestart
                         ? 'Waiting for the API and services to become ready.'
@@ -749,10 +680,8 @@ function SetupPanel({
               </h1>
               <p style={{ fontSize: 14, lineHeight: 1.6, color: 'var(--text-secondary)', maxWidth: 680 }}>
                 {showInstaller
-                  ? 'On a fresh VM, the dashboard can now provision qBittorrent, Radarr, Sonarr, Lidarr, Prowlarr, and optionally SLSKD. Pick the host paths and a few defaults, then the backend will create and wire the stack for you.'
-                  : setupFlow.authRequired
-                    ? 'The backend is waiting for an auth or setup-token handoff before the stack can finish coming online. Stay on this screen until that requirement clears.'
-                    : setupFlow.manualConfigOnly
+                  ? 'On a fresh VM, the dashboard can now provision qBittorrent, Radarr, Sonarr, Lidarr, Prowlarr, and SLSKD. Pick the host paths and a few defaults, then the backend will create and wire the stack for you.'
+                  : setupFlow.manualConfigOnly
                       ? 'This deployment is still configured through backend `.env` values. Update the relevant host or API key entries there, restart the API, then refresh status here.'
                       : setupFlow.phaseInProgress || awaitingBackendRestart
                         ? 'The installer finished enough work to restart the backend, but this screen should stay active until the backend reports a ready phase or readiness flag.'
@@ -934,20 +863,6 @@ function SetupPanel({
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14, marginTop: 18 }}>
-              {setupAuthRequired && (
-                <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  <span style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Setup Token</span>
-                  <input
-                    type="password"
-                    value={setupToken}
-                    onChange={(e) => updateSetupToken(e.target.value)}
-                    placeholder="Paste SETUP_BOOTSTRAP_TOKEN"
-                    autoComplete="off"
-                    spellCheck="false"
-                    style={setupInputStyle}
-                  />
-                </label>
-              )}
               <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 <span style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>qB Username</span>
                 <input value={form.qbittorrent.username} onChange={(e) => updateForm(['qbittorrent', 'username'], e.target.value)} style={setupInputStyle} />
@@ -966,7 +881,7 @@ function SetupPanel({
               </label>
             </div>
 
-            {(setupStateError || hasBlockingIssues || setupWarnings.length > 0 || persistedInstallError || setupFlow.authRequired || installError || installResult?.success || awaitingBackendRestart) && (
+            {(setupStateError || hasBlockingIssues || setupWarnings.length > 0 || persistedInstallError || installError || installResult?.success || awaitingBackendRestart) && (
               <div style={{ marginTop: 18, borderRadius: 16, padding: 14, background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border-subtle)' }}>
                 {noLibrarySelected && (
                   <div style={{ fontSize: 12, color: '#ff9f0a' }}>
@@ -983,21 +898,9 @@ function SetupPanel({
                     {selectedValidationIssues.join(' ')}
                   </div>
                 )}
-                {missingSetupToken && (
-                  <div style={{ fontSize: 12, color: '#5ac8fa', marginTop: 6, lineHeight: 1.6 }}>
-                    Paste the SETUP_BOOTSTRAP_TOKEN printed by ./install.sh before installing the stack.
-                  </div>
-                )}
                 {setupWarnings.length > 0 && (
                   <div style={{ fontSize: 12, color: '#ff9f0a', marginTop: 6, lineHeight: 1.6 }}>
                     {setupWarnings.join(' ')}
-                  </div>
-                )}
-                {setupFlow.authRequired && (
-                  <div style={{ fontSize: 12, color: '#5ac8fa', marginTop: 6, lineHeight: 1.6 }}>
-                    Authentication is still required{authServices.length > 0 ? ` for ${authServices.join(', ')}` : ''}.
-                    {authHints.length > 0 ? ` ${authHints.join(' ')}` : ''}
-                    {setupTokenValue ? ` ${setupFlow.setupTokenRequired ? 'Setup token' : 'Auth reference'}: ${setupTokenValue}` : ''}
                   </div>
                 )}
                 {persistedInstallError && (
@@ -1457,13 +1360,12 @@ export default function App() {
   const handleSidebarClose = useCallback(() => setSidebarOpen(false), []);
   const handleManualSearchClose = useCallback(() => setManualSearchTarget(null), []);
   const handleStatusRefresh = useCallback(() => fetchStatus(), [fetchStatus]);
-  const handleSetupInstall = useCallback(async (payload, setupToken = '', tokenHeader = 'X-Setup-Token') => {
+  const handleSetupInstall = useCallback(async (payload) => {
     setInstallingSetup(true);
     setSetupInstallError(null);
     setSetupInstallResult(null);
     try {
-      const headers = setupToken ? { [tokenHeader || 'X-Setup-Token']: setupToken } : {};
-      const data = await apiPost('/api/setup/install', payload, { headers });
+      const data = await apiPost('/api/setup/install', payload);
       setSetupInstallResult(data);
       if (data.restartScheduled) setAwaitingBackendRestart(true);
       else setInstallingSetup(false);

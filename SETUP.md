@@ -28,8 +28,8 @@ Use this on a clean VM.
 - Leave `RADARR_API_KEY`, `SONARR_API_KEY`, and `LIDARR_API_KEY` blank.
 - Run `./install.sh` from an interactive shell.
 - If Docker Engine or the Docker Compose plugin is missing on Ubuntu/Debian-like systems, let the installer add them with `sudo`.
-- If `SETUP_BOOTSTRAP_TOKEN` is blank, the installer generates one, saves it in `.env`, and prints it at the end.
 - Open the dashboard root URL after startup and continue from the in-app Settings view.
+- The in-app installer selects Radarr, Sonarr, Lidarr, Prowlarr, qBittorrent, and SLSKD by default.
 
 Important: the setup UI is part of the main frontend app. There is no dedicated frontend `/setup` page.
 
@@ -48,7 +48,6 @@ Use this if the media stack already exists and you only need the dashboard.
 - `DASHBOARD_PORT` defaults to `8888`.
 - `INSTALLER_STATE_HOST_PATH` defaults to `./backend/installer-state.json`.
 - `INSTALLER_STATE_PATH` defaults to `/app/installer-state.json`.
-- `SETUP_BOOTSTRAP_TOKEN` can be set manually, but the installer will generate one automatically for web onboarding when it is blank.
 
 ## Production host overrides
 
@@ -75,7 +74,6 @@ docker compose -f docker-compose.yml -f docker-compose.production-host.yml up -d
 - `backend/activity-log.json`
 - `backend/bandwidth-lifetime.json`
 - `backend/installer-state.json` by default, or whatever `INSTALLER_STATE_HOST_PATH` points to
-- `.env` for `SETUP_BOOTSTRAP_TOKEN`
 
 ## Logs and setup triage
 
@@ -99,7 +97,6 @@ Expected first-run behavior on a clean VM:
 - the dashboard root URL loads even if no library service is configured yet
 - the app pushes you toward the Settings view when setup is still required
 - `/api/setup/state` stays available while `INSTALLER_ENABLED=true`
-- the installer prints the setup bootstrap token and persists it to `.env` as `SETUP_BOOTSTRAP_TOKEN`
 - if the installer had to add your user to the `docker` group, follow-up commands in the same shell may need `sudo docker compose ...` until you re-login or run `newgrp docker`
 
 ## Docker socket access

@@ -24,23 +24,6 @@ export class ValidationError extends AppError {
   }
 }
 
-export class SetupAuthError extends AppError {
-  constructor(reason = 'missing', details = null) {
-    const invalid = reason === 'invalid';
-    super(
-      invalid ? 403 : 401,
-      invalid ? 'Invalid setup bootstrap token' : 'Setup bootstrap token required',
-      {
-        code: invalid ? 'SETUP_AUTH_INVALID' : 'SETUP_AUTH_REQUIRED',
-        publicMessage: invalid
-          ? 'The supplied setup token was rejected.'
-          : 'A setup token is required for this action.',
-        details,
-      },
-    );
-  }
-}
-
 export class InstallerDisabledError extends AppError {
   constructor() {
     super(403, 'Installer actions are disabled', {

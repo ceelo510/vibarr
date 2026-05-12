@@ -1,15 +1,37 @@
-## 2026-05-11 — Fix first-run setup token and qB status UX
+## 2026-05-11 — Remove first-run setup auth gate and enable SLSKD by default
+
+**Goal:** make clean-VM setup a direct click-through installer with the full media stack selected by default.
+
+**What changed:**
+- Removed the first-run setup auth gate from the backend, installer script, Compose environment, docs, and setup UI.
+- Removed the setup credential input and warning text from the first-run installer card.
+- Made SLSKD selected by default alongside Radarr, Sonarr, Lidarr, Prowlarr, and qBittorrent.
+- Kept `/api/setup/install` rate-limited, but it no longer fails with a setup-auth 401 before the user can install the stack.
+
+**Files changed:**
+- `install.sh`
+- `docker-compose.yml`
+- `.env.example`
+- `README.md`
+- `SETUP.md`
+- `backend/src/errors.js`
+- `backend/src/installerState.js`
+- `backend/src/middleware.js`
+- `backend/src/routes/installer.js`
+- `frontend/src/App.jsx`
+- `CHANGELOG.md`
+
+## 2026-05-11 — Fix first-run setup auth and qB status UX
 
 **Goal:** make the clean-VM onboarding UI match the installer contract before users click `Install Stack`.
 
 **What changed:**
 - Removed the Compose defaults that injected `admin/adminadmin` qBittorrent credentials into clean web-onboarding installs, so the dashboard no longer reports qBittorrent as `DOWN` before qBittorrent exists.
-- Added a Setup Token field to the first-run installer and sends it as the configured setup-token header on `/api/setup/install`, preventing the button from producing a 401 on the first click.
-- Passed `SETUP_BOOTSTRAP_TOKEN` through Compose into the backend container so the token printed by `./install.sh` is the token the setup API actually accepts.
+- Added a short-lived setup-auth path for `/api/setup/install`; that auth gate was removed in the later entry above so clean-VM installs are now click-through.
 - Switched first-run qBittorrent credential setup from offline PBKDF2 config writes to qBittorrent's Web API: the installer now logs in with the temporary first-run admin password, saves the generated dashboard credentials through qBittorrent itself, and verifies the generated credentials before wiring Arr clients.
 - Updated qBittorrent session handling for current qBittorrent login responses, which now return a `204` with a `QBT_SID_8080` cookie instead of the older `Ok.` body and `SID` cookie.
 - Chowned the installer-created `/data` library and downloads folders to the configured PUID/PGID before creating Arr root folders, so Radarr/Sonarr/Lidarr do not reject fresh paths as unwritable.
-- Kept setup auth metadata under the setup-state `auth` object instead of treating it as a global unresolved-auth phase.
+- Kept setup auth metadata under the setup-state `auth` object instead of treating it as a global unresolved-auth phase; that metadata path was removed in the later entry above.
 - Fixed frontend API error message parsing so structured backend errors show their real message instead of `[object Object]`.
 
 **Files changed:**
@@ -63,13 +85,13 @@
 - `.github/workflows/ci.yml`
 - `CHANGELOG.md`
 
-## 2026-05-08 — Surface the setup bootstrap token in first-run installs
+## 2026-05-08 — Surface first-run setup auth in install output
 
-**What was fixed:** first-run onboarding no longer requires scraping backend logs for the setup bootstrap token. When web onboarding is enabled, the installer now makes sure the token exists in `.env` and prints it in the success output with concise guidance.
+**What was fixed:** first-run onboarding briefly used an installer-generated auth secret instead of requiring users to scrape backend logs. This auth gate was later removed so the clean-VM installer can be started directly from the UI.
 
 **What changed:**
-- `install.sh` now preserves or generates `SETUP_BOOTSTRAP_TOKEN` whenever web onboarding is enabled, writes it into `.env`, and prints it after startup.
-- `.env.example`, `README.md`, `SETUP.md`, and `CLAUDE.md` now document that the token is persisted in `.env` and surfaced directly by the installer.
+- `install.sh` briefly generated and printed the onboarding auth secret.
+- `.env.example`, `README.md`, `SETUP.md`, and `CLAUDE.md` documented that older auth flow before it was removed.
 
 **Files changed:**
 - `install.sh`
@@ -363,7 +385,7 @@ if (!guid && !downloadUrl) return res.status(400).json({ error: 'Missing guid or
 console.log(`[grab] ${service} ${endpoint}`, { hasGuid: Boolean(guid), hasDownloadUrl: Boolean(downloadUrl), indexerId: indexerId ?? null });
 ```
 
-**Verification:** Ran backend syntax test, frontend Vitest, and frontend production build in `.remote-vibarr-work`. Ran testbench deploy against `testbench1`; the stack built and `/api/setup/state` plus `/api/health` returned 200, then setup install failed with HTTP 401 because the fleet harness did not send the newer `SETUP_BOOTSTRAP_TOKEN`.
+**Verification:** Ran backend syntax test, frontend Vitest, and frontend production build in `.remote-vibarr-work`. Ran testbench deploy against `testbench1`; the stack built and `/api/setup/state` plus `/api/health` returned 200, then setup install failed with HTTP 401 because the fleet harness did not send the newer onboarding auth secret.
 
 ## 2026-05-08 — Turn active download cards blue with a subtle pulse
 

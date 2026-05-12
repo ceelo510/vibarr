@@ -13,7 +13,6 @@ import {
   wrapRouter,
 } from '../errors.js';
 import {
-  ensureSetupBootstrapToken,
   readInstallerState,
   writeInstallerState,
 } from '../installerState.js';
@@ -24,7 +23,6 @@ const INSTALLER_NETWORK = 'arr-network';
 const INSTALLER_LABEL = 'com.vibarr.managed';
 const INSTALLER_STACK_LABEL = 'com.vibarr.stack';
 const DEFAULT_STACK_LABEL = 'default';
-const SETUP_TOKEN_ENV_NAME = 'SETUP_BOOTSTRAP_TOKEN';
 const ALLOWED_SERVICES = ['radarr', 'sonarr', 'lidarr', 'prowlarr', 'qbittorrent', 'slskd'];
 const LIBRARY_SERVICES = ['radarr', 'sonarr', 'lidarr'];
 const QB_USERNAME_PATTERN = /^[A-Za-z0-9._-]{1,32}$/;
@@ -54,7 +52,7 @@ const DEFAULT_SETUP = {
     lidarr: true,
     prowlarr: true,
     qbittorrent: true,
-    slskd: false,
+    slskd: true,
   },
   qbittorrent: {
     username: 'server',
@@ -951,7 +949,6 @@ async function updateInstallerPhase(baseState, patch, logFields = null) {
   const nextState = writeInstallerState({
     ...baseState,
     ...patch,
-    setupAuth: baseState.setupAuth,
   }, { includeSecrets: true });
   if (logFields) {
     logInstallerEvent('info', 'phase_changed', {
@@ -996,7 +993,6 @@ async function maybePromotePhase(state) {
 }
 
 router.get('/setup/state', async (req, res) => {
-  const authState = ensureSetupBootstrapToken().setupAuth;
   let state = readInstallerState({ includeSecrets: true });
   state = await maybePromotePhase(state);
   const requestedServices = parseRequestedServices(req.query.services);
@@ -1027,11 +1023,9 @@ router.get('/setup/state', async (req, res) => {
     lastInstallError: publicState.lastInstallError,
     authRequired: false,
     auth: {
-      required: installerEnabled,
-      tokenHeader: authState?.tokenHeader || 'X-Setup-Token',
-      tokenEnvVar: authState?.tokenEnvVar || SETUP_TOKEN_ENV_NAME,
-      tokenConfigured: Boolean(authState?.tokenConfigured),
-      tokenSource: authState?.tokenSource || 'none',
+      required: false,
+      tokenConfigured: false,
+      tokenSource: 'disabled',
     },
     installerEnabled,
     canBootstrap: installerEnabled && selectionConflicts.length === 0,
@@ -1055,7 +1049,7 @@ router.post('/setup/install', async (req, res) => {
     throw new InstallerConflictError(conflicts);
   }
 
-  let state = ensureSetupBootstrapToken();
+  let state = readInstallerState({ includeSecrets: true });
   const qbPassword = setup.qbittorrent.password || randomSecret(20);
   const slskApiKey = randomSecret(32);
   const slskWebPassword = setup.slskd.webPassword || randomSecret(18);
@@ -1079,8 +1073,7 @@ router.post('/setup/install', async (req, res) => {
   logInstallerEvent('info', 'install_started', {
     selectedServices: enabledServices,
     setup,
-    authRequired: true,
-    tokenHeader: state.setupAuth?.tokenHeader,
+    authRequired: false,
   });
 
   try {
@@ -1225,11 +1218,8 @@ router.post('/setup/install', async (req, res) => {
     res.json({
       success: true,
       restartScheduled: true,
-      authRequired: true,
-      auth: {
-        tokenHeader: state.setupAuth?.tokenHeader || 'X-Setup-Token',
-        tokenEnvVar: state.setupAuth?.tokenEnvVar || SETUP_TOKEN_ENV_NAME,
-      },
+      authRequired: false,
+      auth: { required: false },
       phase: state.phase,
       status: state.status,
       services: setup.services,
@@ -1273,7 +1263,6 @@ router.post('/setup/install', async (req, res) => {
       lastInstallError,
       installFinishedAt: new Date().toISOString(),
       pendingRestartUntil: null,
-      setupAuth: state.setupAuth,
     }, { includeSecrets: true });
 
     logInstallerEvent('error', 'install_failed', {
