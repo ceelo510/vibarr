@@ -1080,12 +1080,16 @@ export default function App() {
   const startingSearchTimersRef = useRef([]);
   const setupGateWasUsedRef = useRef(false);
   const setupFlow = useMemo(() => getSetupFlowState(statusData, setupState), [statusData, setupState]);
+  const shouldPollRuntimeActivity = Boolean(statusData) && !setupFlow.shouldStayInSetup;
 
   const fetchContainers = useCallback(async () => {
     try {
-      const data = await apiFetch('/api/containers');
+      const data = await apiFetchWithTimeout('/api/containers', {}, 5000);
       setContainers(data);
-    } catch (e) { console.error('[fetchContainers]', e); }
+    } catch (e) {
+      console.error('[fetchContainers]', e);
+      setContainers([]);
+    }
   }, []);
 
   const fetchTorrents = useCallback(async () => {
@@ -1169,12 +1173,15 @@ export default function App() {
 
   const fetchStatus = useCallback(async () => {
     try {
-      const data = await apiFetch('/api/status');
+      const data = await apiFetchWithTimeout('/api/status', {}, 5000);
       setStatusData(data);
       setStatusError(null);
     } catch (e) {
-      console.error('[fetchStatus]', e);
-      setStatusError(e);
+      const error = e.name === 'AbortError'
+        ? Object.assign(new Error('Status check timed out'), { endpoint: '/api/status', method: 'GET' })
+        : e;
+      console.error('[fetchStatus]', error);
+      setStatusError(error);
     }
   }, []);
 
@@ -1191,6 +1198,25 @@ export default function App() {
       setSetupStateError(error);
     }
   }, []);
+
+  useEffect(() => {
+    if (shouldPollRuntimeActivity) return;
+    clearStartingSearchTimers();
+    torrentsRef.current = [];
+    prevPipelineRef.current = {};
+    setTorrents([]);
+    setTorrentError(null);
+    setSlskdDownloads([]);
+    setPendingSearches([]);
+    setPipeline([]);
+    setStartingSearch(false);
+    setArrQueue([]);
+    setMediaInfo({});
+    setBwHistory([]);
+    setBwTotals({ dl: 0, ul: 0 });
+    setBwLifetime({ dl: 0, ul: 0 });
+    setTailscaleIp(null);
+  }, [clearStartingSearchTimers, shouldPollRuntimeActivity]);
 
   useEffect(() => {
     if (!manualSearchTarget) { setManualSearchResults([]); return; }
@@ -1222,33 +1248,46 @@ export default function App() {
 
     const init = async () => {
       setLoading(true);
-      const safePromise = Promise.all([fetchContainers(), fetchTorrents(), fetchTailscaleIp(), fetchSlskd(), fetchPendingSearches(), fetchArrQueue(), fetchStatus(), fetchSetupState()]);
+      const safePromise = shouldPollRuntimeActivity
+        ? Promise.all([fetchContainers(), fetchTorrents(), fetchTailscaleIp(), fetchSlskd(), fetchPendingSearches(), fetchArrQueue(), fetchStatus(), fetchSetupState()])
+        : Promise.all([fetchContainers(), fetchStatus(), fetchSetupState()]);
       await safePromise.finally(() => {
         setLoading(false);
-        fetchMediaInfo(torrentsRef.current);
+        if (shouldPollRuntimeActivity) fetchMediaInfo(torrentsRef.current);
       });
     };
     const refresh = async () => {
-      await Promise.all([fetchContainers(), fetchTorrents(), fetchSlskd(), fetchPendingSearches(), fetchArrQueue(), fetchStatus()]);
+      if (shouldPollRuntimeActivity) {
+        await Promise.all([fetchContainers(), fetchTorrents(), fetchSlskd(), fetchPendingSearches(), fetchArrQueue(), fetchStatus()]);
+        return;
+      }
+      await Promise.all([fetchContainers(), fetchStatus(), fetchSetupState()]);
     };
     init().catch((e) => console.error('[init]', e.message));
     const t1 = setInterval(refresh, 5000);
-    const t2 = setInterval(() => fetchTailscaleIp(), 60000);
-    const t3 = setInterval(() => fetchMediaInfo(torrentsRef.current), 30000);
+    const t2 = shouldPollRuntimeActivity ? setInterval(() => fetchTailscaleIp(), 60000) : null;
+    const t3 = shouldPollRuntimeActivity ? setInterval(() => fetchMediaInfo(torrentsRef.current), 30000) : null;
     const t4 = setInterval(() => {
       fetchStatus();
       fetchSetupState();
     }, 60000);
-    return () => { clearInterval(t1); clearInterval(t2); clearInterval(t3); clearInterval(t4); };
-  }, [fetchContainers, fetchTorrents, fetchTailscaleIp, fetchSlskd, fetchPendingSearches, fetchArrQueue, fetchMediaInfo, fetchStatus, fetchSetupState]);
+    return () => {
+      clearInterval(t1);
+      if (t2) clearInterval(t2);
+      if (t3) clearInterval(t3);
+      clearInterval(t4);
+    };
+  }, [fetchArrQueue, fetchContainers, fetchMediaInfo, fetchPendingSearches, fetchSetupState, fetchSlskd, fetchStatus, fetchTailscaleIp, fetchTorrents, shouldPollRuntimeActivity]);
 
   const torrentHashKey = torrents.map(t => t.hash).sort().join(',');
   useEffect(() => {
+    if (!shouldPollRuntimeActivity) return;
     const missing = torrents.filter(t => t.hash && !mediaInfo[t.hash]);
     if (missing.length > 0) fetchMediaInfo(missing);
-  }, [torrentHashKey, mediaInfo, fetchMediaInfo]);
+  }, [torrentHashKey, mediaInfo, fetchMediaInfo, shouldPollRuntimeActivity]);
 
   useEffect(() => {
+    if (!shouldPollRuntimeActivity) return undefined;
     const poll = async () => {
       try {
         const { dlSpeed, ulSpeed, dlTotal, ulTotal, lifetimeDl, lifetimeUl } = await apiFetch('/api/bandwidth');
@@ -1263,7 +1302,7 @@ export default function App() {
     poll();
     const t = setInterval(poll, 3000);
     return () => clearInterval(t);
-  }, []);
+  }, [shouldPollRuntimeActivity]);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', lightMode ? 'light' : 'dark');

@@ -1,3 +1,15 @@
+## 2026-05-12 — Prevent post-install frontend freeze on startup
+
+**Goal:** stop the dashboard from getting stuck on `Loading vibarr…` after the first-run installer restarts the stack.
+
+**What changed:**
+- Added startup request timeouts for the frontend's initial `/api/containers` and `/api/status` fetches.
+- If those requests stall during the backend restart window, the app now records the error and continues rendering instead of waiting forever behind the loading skeleton.
+
+**Files changed:**
+- `frontend/src/App.jsx`
+- `CHANGELOG.md`
+
 ## 2026-05-12 — Retry npm installs during container builds
 
 **Goal:** keep fresh-VM and production Docker builds from failing on transient npm registry and DNS errors.
@@ -9,6 +21,18 @@
 **Files changed:**
 - `backend/Dockerfile`
 - `frontend/Dockerfile`
+- `CHANGELOG.md`
+
+## 2026-05-12 — Stop setup screen from polling services that do not exist yet
+
+**Goal:** make the first-run onboarding screen behave like a clean install instead of a broken dashboard.
+
+**What changed:**
+- While setup is still required, the frontend now polls only container/status/setup endpoints and stops hitting qBittorrent, SLSKD, bandwidth, queue, pending-search, and Tailscale endpoints that cannot succeed before provisioning.
+- Entering the setup gate now clears download/activity/bandwidth runtime state so the installer screen stays quiet and does not show stale or misleading operational data.
+
+**Files changed:**
+- `frontend/src/App.jsx`
 - `CHANGELOG.md`
 
 ## 2026-05-12 — Make frontend container builds deterministic
