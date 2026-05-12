@@ -1,0 +1,146 @@
+/* ── Material Symbols Rounded (self-hosted) ── */
+@font-face {
+  font-family: 'Material Symbols Rounded';
+  font-style: normal;
+  font-weight: 100 700;
+  font-display: block;
+  src: url('/fonts/material-symbols-rounded.woff2') format('woff2');
+}
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Theme Variables ── */
+:root {
+  --bg-base: #000000;
+  --bg-nav: rgba(10,10,12,0.96);
+  --bg-header: rgba(0,0,0,0.85);
+  --bg-service-strip: rgba(28,28,30,0.6);
+  --bg-mobile-search: rgba(0,0,0,0.92);
+  --surface: rgba(28,28,30,1);
+  --surface-hover: rgba(44,44,46,1);
+  --surface-elevated: rgba(30,30,32,0.98);
+  --surface-subtle: rgba(255,255,255,0.04);
+  --progress-bar: rgba(58,58,60,1);
+  --border-subtle: rgba(255,255,255,0.08);
+  --border-medium: rgba(255,255,255,0.12);
+  --text-primary: rgba(235,235,245,0.92);
+  --text-secondary: rgba(235,235,245,0.80);
+  --text-muted: rgba(235,235,245,0.50);
+  --text-faint: rgba(235,235,245,0.30);
+  --text-disabled: rgba(235,235,245,0.40);
+  --scrollbar-thumb: rgba(255,255,255,0.15);
+  --scrollbar-thumb-hover: rgba(255,255,255,0.25);
+  --shimmer-base: #2c2c2e;
+  --shimmer-highlight: #3a3a3c;
+  --carousel-fade: #000000;
+  --rail-hover-bg: rgba(28,28,30,1);
+  --rail-hover-color: rgba(235,235,245,0.80);
+  --pill-inactive-color: rgba(235,235,245,0.50);
+  --pill-inactive-border: rgba(255,255,255,0.08);
+  --pill-hover-bg: rgba(28,28,30,1);
+  --pill-hover-color: rgba(235,235,245,0.80);
+  --chip-hover-bg: #3a3a3c;
+  --chip-hover-border: #48484a;
+  --genre-pill-color: #aeaeb2;
+  --genre-pill-bg: #2c2c2e;
+  --genre-pill-border: #38383a;
+  --text-muted: rgba(235,235,245,0.62);
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.35);
+  --shadow-md: 0 6px 18px rgba(0,0,0,0.45);
+  --shadow-lg: 0 18px 48px rgba(0,0,0,0.65);
+}
+
+[data-theme="light"] {
+  --bg-base: #f2f2f7;
+  --bg-nav: rgba(248,248,252,0.96);
+  --bg-header: rgba(245,245,250,0.92);
+  --bg-service-strip: rgba(255,255,255,0.80);
+  --bg-mobile-search: rgba(248,248,252,0.98);
+  --surface: rgba(255,255,255,1);
+  --surface-hover: rgba(242,242,247,1);
+  --surface-elevated: rgba(255,255,255,0.99);
+  --surface-subtle: rgba(0,0,0,0.03);
+  --progress-bar: rgba(200,200,210,1);
+  --border-subtle: rgba(0,0,0,0.08);
+  --border-medium: rgba(0,0,0,0.12);
+  --text-primary: rgba(0,0,0,0.85);
+  --text-secondary: rgba(0,0,0,0.65);
+  --text-muted: rgba(0,0,0,0.45);
+  --text-faint: rgba(0,0,0,0.25);
+  --text-disabled: rgba(0,0,0,0.35);
+  --scrollbar-thumb: rgba(0,0,0,0.18);
+  --scrollbar-thumb-hover: rgba(0,0,0,0.28);
+  --shimmer-base: #e5e5ea;
+  --shimmer-highlight: #d1d1d6;
+  --carousel-fade: #f2f2f7;
+  --rail-hover-bg: rgba(230,230,235,1);
+  --rail-hover-color: rgba(0,0,0,0.70);
+  --pill-inactive-color: rgba(0,0,0,0.45);
+  --pill-inactive-border: rgba(0,0,0,0.10);
+  --pill-hover-bg: rgba(242,242,247,1);
+  --pill-hover-color: rgba(0,0,0,0.70);
+  --chip-hover-bg: #e5e5ea;
+  --chip-hover-border: #c7c7cc;
+  --genre-pill-color: #636366;
+  --genre-pill-bg: #e5e5ea;
+  --genre-pill-border: #c7c7cc;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+  --shadow-md: 0 6px 20px rgba(0,0,0,0.07);
+  --shadow-lg: 0 18px 48px rgba(0,0,0,0.12);
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html { scroll-behavior: smooth; }
+
+body {
+  -webkit-tap-highlight-color: transparent;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  min-height: 100dvh;
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  font-feature-settings: "cv11", "ss01", "ss03";
+  background-color: var(--bg-base);
+  background-image: radial-gradient(ellipse at top, rgba(255,255,255,0.025), transparent 60%);
+}
+
+[data-theme="light"] body {
+  background-image: none;
+}
+
+.tabular-nums,
+.speed, .size, .count, .bandwidth, .eta,
+[class*="speed"], [class*="size-"], [class*="count-"] {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum", "cv11";
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+.material-symbols-rounded {
+  font-family: 'Material Symbols Rounded';
+  font-weight: normal;
+  font-style: normal;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  font-feature-settings: 'liga';
+  -webkit-font-feature-settings: 'liga';
+  -webkit-font-smoothing: antialiased;
+}

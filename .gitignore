@@ -1,0 +1,53 @@
+# ─── Dependencies ─────────────────────────────────────────────────────────────
+node_modules/
+.pnp
+.pnp.js
+
+# ─── Build output ────────────────────────────────────────────────────────────
+frontend/dist/
+*.bak
+*.bak2
+*.bak-*
+*.bak.*
+*.pre-fix
+*.old
+*.orig
+*.tmp
+*.swp
+*.swo
+*~
+
+# ─── Environment ─────────────────────────────────────────────────────────────
+.env
+.env.local
+.env.production
+
+# ─── IDE / OS ────────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+.DS_Store
+._*
+Thumbs.db
+
+# ─── Runtime data (mounted volumes) ──────────────────────────────────────────
+# These are bind-mounted at runtime; checked in only as examples
+activity-log.json
+bandwidth-lifetime.json
+installer-state.json
+
+# ─── Logs ────────────────────────────────────────────────────────────────────
+logs/
+*.log
+npm-debug.log*
+
+# Project-specific (internal docs, not for open-source)
+.claude/
+.codebase-memory/
+CLAUDE.md
+DOWNLOAD_FLOW.md
+docs/
+*.prefix-*
+*.pdf
+frontend/public/fonts/*.otf

@@ -1,0 +1,22 @@
+# Production host-specific overrides for the production server.
+# This file is intentionally not named docker-compose.override.yml so it does
+# not auto-apply on clean VMs or generic installs.
+#
+# Use with:
+# docker compose -f docker-compose.yml -f docker-compose.production-host.yml up -d
+services:
+  backend:
+    ports:
+      - "10.0.0.159:3000:3000"
+    volumes:
+      # Tailscale socket for IP detection
+      - /var/run/tailscale/tailscaled.sock:/var/run/tailscale/tailscaled.sock:ro
+      # Disk usage stats (df + du)
+      - /:/hostfs:ro
+      - /docker:/hostdocker:ro
+      # SLSKD downloads for cleanup/import pipeline
+      - /docker/downloads/slskd:/downloads/slskd
+
+  frontend:
+    ports:
+      - "10.0.0.159:8888:80"

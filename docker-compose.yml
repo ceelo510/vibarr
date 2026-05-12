@@ -1,0 +1,63 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: vibarr-backend
+    user: "0:0"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - INSTALLER_ENABLED=${INSTALLER_ENABLED:-true}
+      - QBITTORRENT_HOST=${QBITTORRENT_HOST:-http://qbittorrent:8080}
+      - QBITTORRENT_USER=${QBITTORRENT_USER:-admin}
+      - QBITTORRENT_PASS=${QBITTORRENT_PASS:-adminadmin}
+      - RADARR_HOST=${RADARR_HOST:-http://radarr:7878}
+      - RADARR_API_KEY=${RADARR_API_KEY}
+      - SONARR_HOST=${SONARR_HOST:-http://sonarr:8989}
+      - SONARR_API_KEY=${SONARR_API_KEY}
+      - LIDARR_HOST=${LIDARR_HOST:-http://lidarr:8686}
+      - LIDARR_API_KEY=${LIDARR_API_KEY}
+      - MEDIA_SORTER_HOST=${MEDIA_SORTER_HOST}
+      - SLSKD_HOST=${SLSKD_HOST:-http://slskd:5030}
+      - SLSKD_API_KEY=${SLSKD_API_KEY}
+      - PROWLARR_HOST=${PROWLARR_HOST:-http://prowlarr:9696}
+      - PROWLARR_API_KEY=${PROWLARR_API_KEY}
+      - INSTALLER_STATE_PATH=${INSTALLER_STATE_PATH:-/app/installer-state.json}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./backend/activity-log.json:/app/activity-log.json
+      - ./backend/bandwidth-lifetime.json:/app/bandwidth-lifetime.json
+      - ${INSTALLER_STATE_HOST_PATH:-./backend/installer-state.json}:${INSTALLER_STATE_PATH:-/app/installer-state.json}
+    networks:
+      - arr-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/api/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: vibarr-frontend
+    ports:
+      - "${DASHBOARD_PORT:-8888}:80"
+    depends_on:
+      - backend
+    networks:
+      - arr-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+networks:
+  arr-network:
+    name: ${ARR_NETWORK_NAME:-vibarr-network}
