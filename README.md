@@ -52,6 +52,7 @@ docker compose -f docker-compose.yml -f docker-compose.production-host.yml up -d
 - The backend stays internal-only on port `3000`; the public entry point is the frontend on `DASHBOARD_PORT` (default `8888`).
 - The setup UI is the dashboard root URL. There is no standalone frontend `/setup` route.
 - The in-app installer selects Radarr, Sonarr, Lidarr, Prowlarr, qBittorrent, and SLSKD by default on clean VMs.
+- Prowlarr is installed and linked by default, but public indexers are not auto-created. Add your preferred indexers in Prowlarr after setup; the production host currently uses BitSearch, LimeTorrents, Nyaa.si, TorrentGalaxyClone, and YTS.
 - If the installer had to add your user to the `docker` group, it may keep using `sudo docker compose` in the current shell until you re-login or run `newgrp docker`.
 
 ## Logs and state

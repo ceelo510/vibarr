@@ -1,3 +1,15 @@
+## 2026-05-12 — Document Prowlarr indexer defaults
+
+**User prompt:** `sync everything and all fixes. issues? tell me. but first update the README to include information about these default indexers as concisely as possible.`
+
+**What changed:**
+- Clarified that the clean installer enables and wires Prowlarr by default, but does not auto-create public indexers.
+- Listed the production host's current public Prowlarr indexers as a concise reference.
+
+**Files changed:**
+- `README.md`
+- `CHANGELOG.md`
+
 ## 2026-05-12 — Split dashboard polling rate limits from write limits
 
 **User prompt:** `explain to me WHY these kinds of errors keep coming up. do we have some weird rate limiting? also, what indexers do we even have setup?`
