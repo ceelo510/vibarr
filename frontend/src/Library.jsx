@@ -119,6 +119,35 @@ function Select({ label, value, onChange, options, className }) {
 
 const QUALITY_ORDER = { '4K': 0, '1080p': 1, '720p': 2, '480p': 3, 'HDTV': 4, 'WEB': 5, 'BluRay': 6, 'CAM': 7, 'Other': 8 };
 
+function normalizeProfileName(name) {
+  return String(name || '').toLowerCase();
+}
+
+function selectDefaultQualityProfileId(qualityProfiles, mediaType) {
+  if (!Array.isArray(qualityProfiles) || qualityProfiles.length === 0) return null;
+  const normalized = qualityProfiles.map(profile => ({
+    ...profile,
+    _name: normalizeProfileName(profile?.name),
+  }));
+  const findByPatterns = (patterns) => normalized.find(({ _name }) => patterns.some(pattern => pattern.test(_name)))?.id;
+
+  if (mediaType === 'music') {
+    return findByPatterns([/\blossless\b/]) || normalized[0].id;
+  }
+
+  if (mediaType === 'series' || mediaType === 'movie') {
+    const ultra = findByPatterns([/\b2160p\b/, /\b4k\b/, /\bultra[-\s]?hd\b/, /\buhd\b/]);
+    if (ultra) return ultra;
+    const sense = findByPatterns([/\bhd - 720p\/1080p\b/, /\bhd[-\s]?1080p\b/, /\b1080p\b/, /\b1080\b/]);
+    if (sense) return sense;
+    const fallback = findByPatterns([/\b720p\b/, /\bhd\b/]);
+    if (fallback) return fallback;
+    return normalized[0].id;
+  }
+
+  return normalized[0].id;
+}
+
 function detectResolution(text) {
   if (/2160p|4k(?!\w)|uhd/i.test(text)) return '2160p';
   if (/1080p/i.test(text)) return '1080p';
@@ -414,21 +443,27 @@ function ManualSearchView({ service, id, seasonNumber, title, onGrabbed }) {
 
 function SeasonSelector({ seasons, selected, onChange }) {
   if (!seasons?.length) return null;
+  const selectableSeasons = seasons.filter(s => s.seasonNumber > 0);
+  if (!selectableSeasons.length) return null;
   const toggleSeason = (sn) => {
     onChange(selected.includes(sn) ? selected.filter(s => s !== sn) : [...selected, sn]);
   };
-  const allSelected = seasons.every(s => selected.includes(s.seasonNumber));
+  const selectableSeasonNumbers = selectableSeasons.map(s => s.seasonNumber);
+  const allSelected = selectableSeasonNumbers.every(sn => selected.includes(sn));
   const toggleAll = () => {
-    onChange(allSelected ? [] : seasons.map(s => s.seasonNumber));
+    onChange(allSelected
+      ? selected.filter(sn => !selectableSeasonNumbers.includes(sn))
+      : Array.from(new Set([...selected, ...selectableSeasonNumbers]))
+    );
   };
   return (
     <div className="mt-3">
       <div className="flex items-center justify-between mb-2">
         <label className="text-[11px] text-text-muted font-medium">Select Seasons</label>
-        <button onClick={toggleAll} className="text-[10px] text-accent-blue hover:underline">{allSelected ? 'Deselect All' : 'Select All'}</button>
+        <button onClick={toggleAll} className="text-[10px] text-accent-blue hover:underline">{allSelected ? 'Unselect All' : 'Select All'}</button>
       </div>
       <div className="space-y-1 max-h-40 overflow-y-auto scroll-area">
-        {seasons.filter(s => s.seasonNumber > 0).map(s => (
+        {selectableSeasons.map(s => (
           <label key={s.seasonNumber} className="flex items-center gap-2.5 px-3 py-1.5 rounded-md hover:bg-bg-hover cursor-pointer transition-colors">
             <input
               type="checkbox"
@@ -1055,7 +1090,7 @@ function ArtistDetail({ artistId, onClose, onDelete }) {
                           onClick={() => setDiscoverSelected(discoverSelected.length === discoverAlbums.length ? [] : discoverAlbums.map(a => a.id))}
                           className="text-[10px] text-accent-blue hover:underline"
                         >
-                          {discoverSelected.length === discoverAlbums.length ? 'Deselect All' : 'Select All'}
+                          {discoverSelected.length === discoverAlbums.length ? 'Unselect All' : 'Select All'}
                         </button>
                       </div>
                     </div>
@@ -1249,9 +1284,9 @@ function AddPanel({ item, mediaType, onClose, onAdded }) {
   const [manualStep, setManualStep] = useState(null); // null | 'adding' | 'browse'
   const [addedId, setAddedId] = useState(null);
   const handlePanelClose = useCallback(() => {
-    if (manualStep === 'browse' && addedId && onAdded) onAdded(item);
+    if (manualStep === 'browse' && addedId && onAdded) onAdded({ mediaType, id: addedId, title: item?.title || item?.artistName });
     close();
-  }, [manualStep, addedId, onAdded, item, close]);
+  }, [manualStep, addedId, onAdded, item, close, mediaType]);
 
   useEffect(() => {
     apiFetch(`/api/profiles/${mediaType}`)
@@ -1261,9 +1296,7 @@ function AddPanel({ item, mediaType, onClose, onAdded }) {
         if (data) {
           const defaults = {};
           if (data.qualityProfiles?.length) {
-            // Prefer HD-1080p over 'Any' to avoid accidentally grabbing huge remux files
-            const preferred = data.qualityProfiles.find(p => p.name === 'HD-1080p' || p.name === 'HD - 720p/1080p');
-            defaults.qualityProfileId = (preferred || data.qualityProfiles[0]).id;
+            defaults.qualityProfileId = selectDefaultQualityProfileId(data.qualityProfiles, mediaType);
           }
           if (data.rootFolders?.length) defaults.rootFolderPath = data.rootFolders[0].path;
           if (data.metadataProfiles?.length) defaults.metadataProfileId = data.metadataProfiles[0].id;
@@ -1347,7 +1380,7 @@ function AddPanel({ item, mediaType, onClose, onAdded }) {
       if (data.success) {
         setResult({ success: true, message: data.albumsMonitored ? `Added "${data.artistName}" — ${data.albumsMonitored}/${data.totalAlbums} albums monitored, searching Soulseek...` : `Added "${data.title || data.artistName}" — searching for downloads...` });
         setAdding(false);
-        setTimeout(() => { if (onAdded) onAdded(item); }, 3000);
+        if (onAdded) onAdded({ mediaType, id: data.id, title: data.artistName || data.title || title });
         return;
       } else {
         setResult({ success: false, message: data.error || 'Failed to add' });
@@ -1359,6 +1392,14 @@ function AddPanel({ item, mediaType, onClose, onAdded }) {
   const rating = extractRating(item.ratings);
   const title = mediaType === 'music' ? item.artistName : item.title;
   const fallbackIcon = mediaType === 'movie' ? 'movie' : mediaType === 'series' ? 'tv' : 'album';
+  const albumsAndEPs = lookupAlbums?.filter(a => a.albumType !== 'Single') || [];
+  const albumsAndEPIds = albumsAndEPs.map(a => a.id);
+  const allAlbumsAndEPsSelected = albumsAndEPIds.length > 0 && albumsAndEPIds.every(id => selectedAlbumIds.includes(id));
+  const toggleAlbumsAndEPsSelection = () => {
+    setSelectedAlbumIds(current => (
+      allAlbumsAndEPsSelected ? current.filter(id => !albumsAndEPIds.includes(id)) : Array.from(new Set([...current, ...albumsAndEPIds]))
+    ));
+  };
 
   return (
     <div className={`fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-[20px] ${closing ? 'modal-backdrop-exit' : 'modal-backdrop-enter'}`} onClick={handlePanelClose}>
@@ -1441,12 +1482,12 @@ function AddPanel({ item, mediaType, onClose, onAdded }) {
                   <div className="flex items-center justify-between mb-2">
                     <label className="text-[11px] text-text-muted font-medium">Select Albums ({selectedAlbumIds.length} selected)</label>
                     <div className="flex gap-2">
-                      <button onClick={() => setSelectedAlbumIds(lookupAlbums.filter(a => a.albumType !== 'Single').map(a => a.id))} className="text-[10px] text-accent-blue hover:underline">Albums + EPs</button>
+                      <button onClick={() => setSelectedAlbumIds(albumsAndEPIds)} className="text-[10px] text-accent-blue hover:underline">Albums + EPs</button>
                       <button
-                        onClick={() => setSelectedAlbumIds(selectedAlbumIds.length === lookupAlbums.length ? [] : lookupAlbums.map(a => a.id))}
+                        onClick={toggleAlbumsAndEPsSelection}
                         className="text-[10px] text-accent-blue hover:underline"
                       >
-                        {selectedAlbumIds.length === lookupAlbums.length ? 'Deselect All' : 'Select All'}
+                        {allAlbumsAndEPsSelected ? 'Unselect All' : 'Select All'}
                       </button>
                     </div>
                   </div>
@@ -1546,8 +1587,8 @@ function AddPanel({ item, mediaType, onClose, onAdded }) {
                 title={title}
                 onGrabbed={() => {
                   setResult({ success: true, message: `Added "${title}" — release grabbed, downloading shortly` });
+                  if (onAdded) onAdded({ mediaType, id: addedId, title });
                   setManualStep(null);
-                  setTimeout(() => { if (onAdded) onAdded(item); }, 3000);
                 }}
               />
             </div>
@@ -1874,7 +1915,13 @@ function MovieDownloadPanel({ movie, onClose, onDelete }) {
 
 // ── Main Library Component ──────────────────────────────────────────────────
 
-export default function Library({ externalQuery, onExternalQueryChange, serviceStatus = {}, onOpenSettings }) {
+export default function Library({
+  externalQuery,
+  onExternalQueryChange,
+  serviceStatus = {},
+  onOpenSettings,
+  onAdded,
+}) {
   const [mode, setMode] = useState('library'); // 'library' or 'add'
   const [query, setQuery] = useState(externalQuery || '');
   const [activeType, setActiveType] = useState('all');
@@ -1892,6 +1939,8 @@ export default function Library({ externalQuery, onExternalQueryChange, serviceS
   const [queuedSeriesIds, setQueuedSeriesIds] = useState(new Set());
   const [queuedMovieIds, setQueuedMovieIds] = useState(new Set());
   const [refreshing, setRefreshing] = useState(false);
+  const autoOpenedAddOnEmptyLibrary = useRef(false);
+  const addPanelHandledRef = useRef(false);
   const debounceRef = useRef(null);
   const inputRef = useRef(null);
   const libraryRequestRef = useRef(0);
@@ -2128,6 +2177,38 @@ export default function Library({ externalQuery, onExternalQueryChange, serviceS
     !serviceAvailability.movie && 'Movies',
     !serviceAvailability.music && 'Music',
   ].filter(Boolean);
+  const isLibraryEmptyWelcome = initialLoaded && !loading && !query.trim() && !isMissingFilter && activeType === 'all' && totalLibrary === 0 && !libraryModeUnavailable && !libraryError && !isServiceIssueStatus(activeLibraryIssue?.status) && hasLibraryServices && availableAddTypes.length > 0;
+
+  const jumpToAddMode = useCallback(() => {
+    if (addModeUnavailable) {
+      onOpenSettings?.();
+      return;
+    }
+    const typeMap = { series: 'series', movie: 'movie', music: 'music' };
+    if (typeMap[activeType]) setAddType(typeMap[activeType]);
+    setMode('add');
+  }, [addModeUnavailable, activeType, onOpenSettings]);
+
+  useEffect(() => {
+    if (!isLibraryEmptyWelcome || autoOpenedAddOnEmptyLibrary.current || mode !== 'library') return;
+    const typeMap = { series: 'series', movie: 'movie', music: 'music' };
+    if (typeMap[activeType]) setAddType(typeMap[activeType]);
+    else if (availableAddTypes[0]?.key) setAddType(availableAddTypes[0].key);
+    setMode('add');
+    autoOpenedAddOnEmptyLibrary.current = true;
+  }, [activeType, isLibraryEmptyWelcome, mode, availableAddTypes]);
+
+  useEffect(() => {
+    if (addPanel) addPanelHandledRef.current = false;
+  }, [addPanel]);
+
+  const handlePanelAdded = useCallback((payload) => {
+    if (addPanelHandledRef.current) return;
+    addPanelHandledRef.current = true;
+    setAddPanel(null);
+    doLibrarySearch('', 'all');
+    onAdded?.(payload);
+  }, [doLibrarySearch, onAdded]);
 
   return (
     <div className="flex-1 overflow-y-auto scroll-area">
@@ -2297,17 +2378,19 @@ export default function Library({ externalQuery, onExternalQueryChange, serviceS
           {initialLoaded && !loading && totalLibrary === 0 && (
             <div className="flex flex-col items-center justify-center py-20 text-text-muted">
               <span className="material-symbols-rounded mb-3" style={{ fontSize: 48, fontVariationSettings: "'FILL' 1" }}>
-                {libraryError || isServiceIssueStatus(activeLibraryIssue?.status) ? 'cloud_off' : isMissingFilter ? 'task_alt' : 'search_off'}
+                {isLibraryEmptyWelcome ? 'playlist_add' : libraryError || isServiceIssueStatus(activeLibraryIssue?.status) ? 'cloud_off' : isMissingFilter ? 'task_alt' : 'search_off'}
               </span>
               <p className="text-[14px]">
-                {libraryModeUnavailable
+                {isLibraryEmptyWelcome
+                  ? 'Your library is empty.'
+                  : libraryModeUnavailable
                   ? 'No library services are configured yet.'
                   : activeLibraryIssue?.status === 'unconfigured'
                     ? 'That library service is not configured yet.'
                     : libraryError || isServiceIssueStatus(activeLibraryIssue?.status)
                       ? 'Library data is temporarily unavailable for this view.'
                     : isMissingFilter
-                      ? 'Nothing missing — library is complete!'
+                    ? 'Nothing missing — library is complete!'
                       : `No media found${query ? ` for "${query}"` : ''}`}
               </p>
               {libraryModeUnavailable || activeLibraryIssue?.status === 'unconfigured' ? (
@@ -2316,17 +2399,17 @@ export default function Library({ externalQuery, onExternalQueryChange, serviceS
                   <button onClick={() => onOpenSettings?.()} className="ml-1 text-accent-blue hover:underline">View setup status</button>
                 </p>
               ) : libraryError || isServiceIssueStatus(activeLibraryIssue?.status) ? (
+                  <p className="text-[12px] mt-1">
+                    Existing results stay visible when possible, but this request did not complete cleanly.
+                    <button onClick={handleRefresh} className="ml-1 text-accent-blue hover:underline">Retry now</button>
+                  </p>
+              ) : isLibraryEmptyWelcome ? (
                 <p className="text-[12px] mt-1">
-                  Existing results stay visible when possible, but this request did not complete cleanly.
-                  <button onClick={handleRefresh} className="ml-1 text-accent-blue hover:underline">Retry now</button>
+                  Get started by searching and adding something to your library.
+                  <button onClick={jumpToAddMode} className="ml-1 text-accent-blue hover:underline">Add New</button>
                 </p>
               ) : !isMissingFilter && (
-                <p className="text-[12px] mt-1">Try a different search, or switch to <button onClick={() => {
-                      if (addModeUnavailable) { onOpenSettings?.(); return; }
-                      const typeMap = { series: 'series', movie: 'movie', music: 'music' };
-                      if (typeMap[activeType]) setAddType(typeMap[activeType]);
-                      setMode('add');
-                    }} className="text-accent-blue hover:underline">Add New</button></p>
+                <p className="text-[12px] mt-1">Try a different search, or switch to <button onClick={jumpToAddMode} className="text-accent-blue hover:underline">Add New</button></p>
               )}
             </div>
           )}
@@ -2419,7 +2502,7 @@ export default function Library({ externalQuery, onExternalQueryChange, serviceS
       {detailView?.type === 'series' && <SeriesDetail seriesId={detailView.id} onClose={() => setDetailView(null)} onDelete={() => { setDetailView(null); doLibrarySearch('', activeType); }} />}
       {detailView?.type === 'artist' && <ArtistDetail artistId={detailView.id} onClose={() => setDetailView(null)} onDelete={() => { setDetailView(null); doLibrarySearch('', activeType); }} />}
       {detailView?.type === 'movie' && <MovieDownloadPanel movie={detailView.data} onClose={() => setDetailView(null)} onDelete={() => { setDetailView(null); doLibrarySearch('', activeType); }} />}
-      {addPanel && <AddPanel item={addPanel} mediaType={addType} onClose={() => setAddPanel(null)} onAdded={() => { setAddPanel(null); doLibrarySearch('', 'all'); }} />}
+      {addPanel && <AddPanel item={addPanel} mediaType={addType} onClose={() => setAddPanel(null)} onAdded={handlePanelAdded} />}
     </div>
   );
 }

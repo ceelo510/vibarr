@@ -182,6 +182,8 @@ function LoadingSkeleton() {
 const STATUS_COLOR = { searching: '#ff9f0a', grabbed: '#30d158', no_results: '#ff453a', error: '#ff453a' };
 const STATUS_LABEL = { searching: 'Searching…', grabbed: 'Grabbed', no_results: 'No results', error: 'Error' };
 const SVC_LABEL = { sonarr: 'TV', radarr: 'Movie', lidarr: 'Music' };
+const ADD_SUCCESS_REFRESH_STEPS_MS = [600, 1400, 2600, 4200];
+const ADD_SUCCESS_PLACEHOLDER_TTL_MS = 9000;
 
 async function apiFetchWithTimeout(url, options = {}, timeoutMs = 5000) {
   const controller = new AbortController();
@@ -1039,6 +1041,7 @@ export default function App() {
   const [slskdDownloads, setSlskdDownloads] = useState([]);
   const [pendingSearches, setPendingSearches] = useState([]);
   const [pipeline, setPipeline] = useState([]);
+  const [startingSearch, setStartingSearch] = useState(false);
   const [manualSearchTarget, setManualSearchTarget] = useState(null);
   const [manualSearchResults, setManualSearchResults] = useState([]);
   const [manualSearchLoading, setManualSearchLoading] = useState(false);
@@ -1074,6 +1077,7 @@ export default function App() {
   // Pollers read the latest torrent list from here without recreating their intervals.
   const torrentsRef = useRef([]);
   const prevPipelineRef = useRef({});
+  const startingSearchTimersRef = useRef([]);
   const setupFlow = useMemo(() => getSetupFlowState(statusData, setupState), [statusData, setupState]);
 
   const fetchContainers = useCallback(async () => {
@@ -1135,6 +1139,15 @@ export default function App() {
       setArrQueue(data);
     } catch (e) { console.error('[fetchArrQueue]', e); }
   }, []);
+
+  const clearStartingSearchTimers = useCallback(() => {
+    startingSearchTimersRef.current.forEach((id) => clearTimeout(id));
+    startingSearchTimersRef.current = [];
+  }, []);
+
+  const refreshDownloadsState = useCallback(async () => {
+    await Promise.all([fetchPendingSearches(), fetchArrQueue(), fetchTorrents(), fetchSlskd()]);
+  }, [fetchPendingSearches, fetchArrQueue, fetchTorrents, fetchSlskd]);
 
   const fetchMediaInfo = useCallback((torrentList) => {
     try {
@@ -1328,6 +1341,25 @@ export default function App() {
     setActiveView(nextView);
   };
 
+  const runAddSuccessRefreshBurst = useCallback(() => {
+    requestView('downloads');
+    setStartingSearch(true);
+    clearStartingSearchTimers();
+    refreshDownloadsState().catch((e) => console.error('[refreshDownloadsState]', e));
+    ADD_SUCCESS_REFRESH_STEPS_MS.forEach((delayMs) => {
+      const timer = setTimeout(() => {
+        refreshDownloadsState().catch((e) => console.error('[refreshDownloadsState]', e));
+      }, delayMs);
+      startingSearchTimersRef.current.push(timer);
+    });
+  }, [clearStartingSearchTimers, refreshDownloadsState, requestView]);
+
+  const handleLibraryMediaAdded = useCallback(() => {
+    runAddSuccessRefreshBurst();
+    const stopTimer = setTimeout(() => setStartingSearch(false), ADD_SUCCESS_PLACEHOLDER_TTL_MS);
+    startingSearchTimersRef.current.push(stopTimer);
+  }, [runAddSuccessRefreshBurst]);
+
 
   const { running, allHealthy, sortedContainers } = useMemo(() => {
     const running = containers.filter(c => c.running);
@@ -1338,6 +1370,17 @@ export default function App() {
     });
     return { running, allHealthy, sortedContainers };
   }, [containers]);
+
+  useEffect(() => () => clearStartingSearchTimers(), [clearStartingSearchTimers]);
+
+  useEffect(() => {
+    if (!startingSearch) return;
+    const hasVisibleWork = pipeline.length + arrQueue.length + torrents.length + slskdDownloads.length + pendingSearches.length > 0;
+    if (hasVisibleWork) {
+      setStartingSearch(false);
+      clearStartingSearchTimers();
+    }
+  }, [startingSearch, pipeline.length, arrQueue.length, torrents.length, slskdDownloads.length, pendingSearches.length, clearStartingSearchTimers]);
 
   const { downloading, totalDl, totalUl } = useMemo(() => ({
     downloading: torrents.filter(t => getTorrentState(t) === 'downloading'),
@@ -1380,6 +1423,8 @@ export default function App() {
     downloading: pipeline.filter(p => p.stage === 'downloading'),
     stuck: pipeline.filter(p => p.stage === 'stuck'),
   }), [pipeline]);
+  const hasDownloadsOrSearchWork = pipeline.length + arrQueue.length + torrents.length + slskdDownloads.length + pendingSearches.length > 0;
+  const showStartingSearchMessage = startingSearch && !hasDownloadsOrSearchWork;
 
   if (loading) return <LoadingSkeleton />;
 
@@ -1673,6 +1718,7 @@ export default function App() {
                   onExternalQueryChange={setHeaderQuery}
                   serviceStatus={serviceStatuses}
                   onOpenSettings={() => requestView('settings')}
+                  onAdded={handleLibraryMediaAdded}
                 />
               </Suspense>
             )}
@@ -1721,6 +1767,21 @@ export default function App() {
                     </div>
                   </div>
                 )}
+                {pendingSearches.length > 0 && (
+                  <div className="px-6 pt-4 pb-2">
+                    <div className="flex items-center gap-2 mb-3">
+                      <p className="text-[11px] font-semibold text-text-muted uppercase tracking-wider">Recent Searches</p>
+                      <span className="text-[10px] font-bold text-text-muted bg-white/[0.07] rounded-full px-1.5 py-0.5 leading-none">
+                        {pendingSearches.length}
+                      </span>
+                    </div>
+                    <div className="space-y-2">
+                      {pendingSearches.map((search) => (
+                        <PendingSearchCard key={search.key || search.id || search.title} search={search} />
+                      ))}
+                    </div>
+                  </div>
+                )}
                 {torrents.length > 0 && <TorrentTable torrents={torrents} mediaInfo={mediaInfo} onRefresh={handleTorrentRefresh} />}
                 {slskdDownloads.length > 0 && (
                   <div className="px-6 pt-4 pb-2">
@@ -1762,7 +1823,7 @@ export default function App() {
                     />
                   </Suspense>
                 )}
-                {pipeline.length === 0 && arrQueue.length === 0 && torrents.length === 0 && slskdDownloads.length === 0 && (
+                {!hasDownloadsOrSearchWork && (
                   <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 300 }}>
                     {torrentError ? (
                       <div style={{ textAlign: 'center' }}>
@@ -1772,8 +1833,12 @@ export default function App() {
                     ) : (
                       <div style={{ textAlign: 'center' }}>
                         <span className="material-symbols-rounded" style={{ fontSize: 52, display: 'block', marginBottom: 16, fontVariationSettings: "'FILL' 0", color: 'var(--text-disabled)' }}>download_done</span>
-                        <p style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 5 }}>All clear</p>
-                        <p style={{ fontSize: 12, color: 'var(--text-faint)' }}>No active transfers</p>
+                        <p style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 5 }}>
+                          {showStartingSearchMessage ? 'Starting search…' : 'All clear'}
+                        </p>
+                        <p style={{ fontSize: 12, color: 'var(--text-faint)' }}>
+                          {showStartingSearchMessage ? 'Watch for the new search to appear in active items' : 'No active transfers'}
+                        </p>
                       </div>
                     )}
                   </div>

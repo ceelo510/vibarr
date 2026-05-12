@@ -1,3 +1,18 @@
+## 2026-05-11 — Polish first-library onboarding and add-flow handoff
+
+**Goal:** make the first post-setup experience guide users into adding media, then hand them directly to the search/download activity view.
+
+**What changed:**
+- Empty My Library now shows a welcome prompt with an Add New CTA instead of the generic no-media search message.
+- Fresh empty installs auto-open Add New once after setup, while My Library still shows the welcome prompt until the first item is added.
+- Add New defaults now prefer Lossless for music and 4K/Ultra-HD/2160p profiles for movies and TV when those profiles exist.
+- Season and album selectors now show `Unselect All` when the default selected set is already selected.
+- Successful movie, TV, and music adds now immediately close the add modal, jump to Downloads, refresh search/download state in a burst, and show pending/recent searches when the backend reports them.
+
+**Files changed:**
+- `frontend/src/App.jsx`
+- `frontend/src/Library.jsx`
+
 ## 2026-05-11 — Remove first-run setup auth gate and enable SLSKD by default
 
 **Goal:** make clean-VM setup a direct click-through installer with the full media stack selected by default.
