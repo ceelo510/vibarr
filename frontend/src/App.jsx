@@ -1078,6 +1078,7 @@ export default function App() {
   const torrentsRef = useRef([]);
   const prevPipelineRef = useRef({});
   const startingSearchTimersRef = useRef([]);
+  const setupGateWasUsedRef = useRef(false);
   const setupFlow = useMemo(() => getSetupFlowState(statusData, setupState), [statusData, setupState]);
 
   const fetchContainers = useCallback(async () => {
@@ -1288,10 +1289,16 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!setupFlow.shouldStayInSetup) return;
-    if (activeView === 'settings') return;
-    setActiveView('settings');
-  }, [activeView, setupFlow.shouldStayInSetup]);
+    if (setupFlow.shouldStayInSetup) {
+      setupGateWasUsedRef.current = true;
+      if (activeView !== 'settings') setActiveView('settings');
+      return;
+    }
+
+    if (!setupGateWasUsedRef.current || activeView !== 'settings' || !statusData) return;
+    setupGateWasUsedRef.current = false;
+    setActiveView(hasAnyLibraryServiceReady(statusData) ? 'library' : 'downloads');
+  }, [activeView, setupFlow.shouldStayInSetup, statusData]);
 
   useEffect(() => {
     if (awaitingBackendRestart) return;
@@ -1320,6 +1327,7 @@ export default function App() {
         if (!nextSetupFlow.shouldStayInSetup) {
           setAwaitingBackendRestart(false);
           setInstallingSetup(false);
+          setupGateWasUsedRef.current = false;
           setActiveView(hasAnyLibraryServiceReady(status) ? 'library' : 'downloads');
         }
       } catch (e) {

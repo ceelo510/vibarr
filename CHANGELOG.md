@@ -1,3 +1,15 @@
+## 2026-05-12 — Leave setup after first-run install completes
+
+**Goal:** make a fresh install land in the new-user library/add flow without requiring an extra click on the Settings setup screen.
+
+**What changed:**
+- After the setup gate has forced the user into Settings, the app now leaves Settings once setup reports ready and opens Library if Radarr, Sonarr, or Lidarr is available.
+- Manual Settings visits after setup remain manual, so the app no longer bounces users out of Settings after the first-run gate is cleared.
+
+**Files changed:**
+- `frontend/src/App.jsx`
+- `CHANGELOG.md`
+
 ## 2026-05-11 — Polish first-library onboarding and add-flow handoff
 
 **Goal:** make the first post-setup experience guide users into adding media, then hand them directly to the search/download activity view.
