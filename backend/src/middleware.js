@@ -40,7 +40,31 @@ export function noCacheMiddleware(app) {
 
 const requestCounts = new Map();
 const RATE_LIMIT_WINDOW_MS = 60_000;
-const RATE_LIMIT_MAX = 300;
+const RATE_LIMIT_MAX = Number(process.env.RATE_LIMIT_MAX || 300);
+const RATE_LIMIT_READ_MAX = Number(process.env.RATE_LIMIT_READ_MAX || 3000);
+
+const READ_HEAVY_PATHS = [
+  '/api/activity-log',
+  '/api/arr-queue',
+  '/api/bandwidth',
+  '/api/containers',
+  '/api/library/',
+  '/api/lookup/',
+  '/api/media-info/',
+  '/api/pending-searches',
+  '/api/qbittorrent/status',
+  '/api/setup/state',
+  '/api/slskd/downloads',
+  '/api/status',
+  '/api/tailscale-ip',
+];
+
+function getRateLimitMax(req) {
+  if (req.method !== 'GET') return RATE_LIMIT_MAX;
+  return READ_HEAVY_PATHS.some(path => req.path === path || req.path.startsWith(path))
+    ? RATE_LIMIT_READ_MAX
+    : RATE_LIMIT_MAX;
+}
 
 // The limiter is in-memory only, so prune idle buckets to keep the map bounded.
 function pruneExpiredRateLimitEntries() {
@@ -52,14 +76,18 @@ function pruneExpiredRateLimitEntries() {
 setInterval(pruneExpiredRateLimitEntries, 60000);
 
 export function rateLimitMiddleware(req, res, next) {
+  const limit = getRateLimitMax(req);
   const ip = req.ip || req.connection.remoteAddress || 'unknown';
+  const key = `${req.method}:${ip}:${limit}`;
   const now = Date.now();
-  const entry = requestCounts.get(ip) || { count: 0, resetAt: now + RATE_LIMIT_WINDOW_MS };
+  const entry = requestCounts.get(key) || { count: 0, resetAt: now + RATE_LIMIT_WINDOW_MS };
   if (now > entry.resetAt) { entry.count = 0; entry.resetAt = now + RATE_LIMIT_WINDOW_MS; }
   entry.count++;
-  requestCounts.set(ip, entry);
-  if (entry.count > RATE_LIMIT_MAX) {
-    return res.status(429).json({ error: 'Too many requests', retryAfter: Math.ceil((entry.resetAt - now) / 1000) });
+  requestCounts.set(key, entry);
+  if (entry.count > limit) {
+    const retryAfter = Math.ceil((entry.resetAt - now) / 1000);
+    res.setHeader('Retry-After', String(retryAfter));
+    return res.status(429).json({ error: 'Too many requests', retryAfter, limit });
   }
   next();
 }

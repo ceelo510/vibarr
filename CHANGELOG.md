@@ -1,3 +1,17 @@
+## 2026-05-12 — Split dashboard polling rate limits from write limits
+
+**User prompt:** `explain to me WHY these kinds of errors keep coming up. do we have some weird rate limiting? also, what indexers do we even have setup?`
+
+**What was broken / what changed:**
+- Confirmed the recurring red request banners were `HTTP 429` responses from the dashboard's own global Express rate limiter, not Sonarr/Prowlarr lookup failures.
+- The old limiter allowed only 300 requests per minute per apparent client IP across every route. Normal dashboard polling can exceed that when the page is open through the Docker/Tailscale proxy because many requests collapse under the same `172.18.0.1` proxy address.
+- Split safe read-heavy dashboard routes into a separate 3000/minute bucket while keeping mutating and unknown routes on the stricter 300/minute bucket.
+- Added a `Retry-After` response header and included the active limit in 429 JSON responses for faster diagnosis.
+
+**Files changed:**
+- `backend/src/middleware.js`: added path-aware rate-limit buckets for polling/search GET routes.
+- `CHANGELOG.md`: prepended this entry.
+
 ## 2026-05-12 — Suppress transient library reconnect banners
 
 **User prompt:** `why am i getting this issue so often? fix it please. make sure it never occurs.`
