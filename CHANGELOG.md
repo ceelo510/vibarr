@@ -1,3 +1,105 @@
+## 2026-05-13 — Fix download-path write permissions for active TV grabs
+
+**User prompt:** Requested investigation into a case where active TV grabs were not downloading or appearing in the library.
+
+**What was broken / what changed:**
+- Verified on May 13, 2026 that search and grab were succeeding, but the grabbed releases remained stuck in queue with no imported files on disk.
+- Traced the live failure to download-client file-open errors, not search logic: the host download path `/docker/downloads/unsorted` had mode `755`, while the torrent daemon runs as a service user that needs write access there. That left the daemon unable to create payload files under `unsorted`.
+- Fixed the live host by changing `/docker/downloads/unsorted` to `2775`, then rechecking/restarting the queued torrents so the download client could begin writing again.
+- Hardened `install.sh` so fresh installs create `/docker/downloads` and `/docker/downloads/unsorted` with the expected `1000:1001` ownership and `2775` permissions instead of inheriting an incompatible host default.
+
+**Files changed:**
+- `install.sh` (around lines 311-330, 536): added download-path permission helpers and enforced the qBittorrent download layout before compose validation/build.
+- `CHANGELOG.md`: prepended this entry.
+
+**Before excerpt:**
+```bash
+ensure_json_file "$INSTALLER_STATE_HOST_PATH" "$DEFAULT_INSTALLER_STATE_JSON"
+
+echo
+info "Validating compose config"
+```
+
+**After excerpt:**
+```bash
+ensure_json_file "$INSTALLER_STATE_HOST_PATH" "$DEFAULT_INSTALLER_STATE_JSON"
+ensure_qbittorrent_download_layout
+
+echo
+info "Validating compose config"
+```
+
+## 2026-05-12 — Tighten library UI and trim duplicate media lookups
+
+**User prompt:** `start a one hour timer and do not stop until it is done. make constant improvements to the UI, flow, and resource usage. no excuses. no finishing early under ANY circumstances or claude will restart you.`
+
+**What was broken / what changed:**
+- The desktop service strip looked cramped at common capture widths, with long service names competing for space and hover state depending on per-chip React state.
+- The add flow opened on a sparse empty state that explained too little about where results came from or what the next action should be.
+- The unconfigured library/add states read like raw error output and left too much dead space in the primary content area.
+- The frontend kept re-requesting `/api/media-info/batch` for torrent hashes it had already loaded or was already fetching, which showed up as repeated duplicate batch calls during live capture.
+- Several poster-heavy secondary surfaces still eager-loaded thumbnails that could be deferred until visible.
+- Tightened the service strip layout with truncation, hover affordances driven by CSS instead of per-chip React state, and cleaner overflow behavior.
+- Let the library/add search header wrap its controls more gracefully instead of compressing everything onto one line.
+- Reworked the add-mode empty state into a clearer operator panel with source context and short workflow guidance, and added a visible source badge above search results.
+- Replaced the unconfigured library/add empty states with structured setup cards and suppressed duplicate top-of-page warnings when those setup cards are already explaining the issue.
+- Added in-memory dedupe for media info requests so the frontend only fetches hashes it does not already have and is not already requesting.
+- Switched episode thumbnails, album art rows, and queue/search poster chips to lazy image loading so the library view does less immediate work during large renders.
+
+**Files changed:**
+- `frontend/src/App.jsx`: memoized `ContainerChip`, removed per-chip hover state, deduped media info batch fetches with refs, lazy-loaded compact poster thumbnails, and tagged the service strip for new layout styling.
+- `frontend/src/App.css`: added service strip mask/overflow polish plus truncation and hover styles for container chips.
+- `frontend/src/Library.jsx`: allowed search/filter controls to wrap, upgraded the add-mode empty state, replaced unconfigured empty states with setup cards, suppressed duplicate warning chrome, added source labels to add search results, and lazy-loaded secondary poster/cover images.
+- `CHANGELOG.md`: prepended this entry.
+
+**Before excerpt:**
+```jsx
+const [hovered, setHovered] = useState(false);
+apiFetch(`/api/media-info/batch?hashes=${hashes.join(',')}`)
+  .then(data => setMediaInfo(prev => ({ ...prev, ...data })))
+```
+
+**After excerpt:**
+```jsx
+const hashes = [...new Set((torrentList || []).map(t => t.hash).filter(Boolean))]
+  .filter((hash) => !mediaInfoRef.current[hash] && !mediaInfoInflightRef.current.has(hash));
+const ContainerChip = React.memo(function ContainerChip({ container, name, href }) {
+```
+
+## 2026-05-12 — Restore episode-level search for continuing seasons
+
+**User prompt:** Reported that ongoing TV seasons were being treated too much like complete-season searches instead of falling back to currently released episode results.
+
+**What was broken / what changed:**
+- Traced the regression to the modular Sonarr search pipeline introduced in `3f1be36` on 2026-05-12. That path only flipped season-level monitoring and then ran `SeasonSearch`, which left continuing seasons with unmonitored episode rows in Sonarr and no eligible episode-level grabs.
+- Added a Sonarr search planner that explicitly enables target episode monitoring through `/api/v3/episode/monitor`, detects released missing episodes in continuing seasons, and swaps those searches to `EpisodeSearch` instead of assuming a season pack exists.
+- Fixed Sonarr pipeline retries to reuse the same season-aware search planner and to fall back to `seasonNumbers` when `retrySeasonNumbers` is absent on newer pipeline entries.
+- Applied the same single-season Sonarr fallback in the add-series flow so freshly added continuing shows do not immediately fall back into the broken season-pack-only behavior.
+
+**Files changed:**
+- `backend/src/routes/pipeline.js` (around lines 143-223, 800-823, 962-989): added `prepareSonarrSearch()`, explicit episode monitoring, continuing-season `EpisodeSearch` fallback, and retry-season handling.
+- `backend/src/routes/library.js` (around lines 13, 1248-1261): imported the shared Sonarr planner so single-season add flows use the same episode-level fallback.
+- `CHANGELOG.md`: prepended this entry.
+
+**Before excerpt:**
+```js
+const cmdResp = await fetch(`${SONARR_HOST}/api/v3/command?apikey=${SONARR_API_KEY}`, {
+  method: 'POST', headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ name: 'SeasonSearch', seriesId: id, seasonNumber: sn }),
+});
+```
+
+**After excerpt:**
+```js
+if (seasonSearch.mode === 'episode') {
+  addLogStep(logId, `Searching ${seasonSearch.missingReleasedEpisodeIds.length} released episode(s) individually for ${snLabel}`, 'info');
+}
+const cmdResp = await fetch(`${SONARR_HOST}/api/v3/command?apikey=${SONARR_API_KEY}`, {
+  method: 'POST', headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(seasonSearch.cmdBody),
+});
+```
+
 ## 2026-05-12 — Document Prowlarr indexer defaults
 
 **User prompt:** `sync everything and all fixes. issues? tell me. but first update the README to include information about these default indexers as concisely as possible.`

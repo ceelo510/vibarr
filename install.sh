@@ -302,6 +302,29 @@ ensure_json_file() {
   printf '%s\n' "$default_json" > "$file_path"
 }
 
+run_path_command() {
+  if "$@"; then
+    return 0
+  fi
+  if command -v sudo &>/dev/null; then
+    sudo "$@"
+    return 0
+  fi
+  return 1
+}
+
+ensure_download_directory() {
+  local dir_path=$1
+  run_path_command mkdir -p "$dir_path"
+  run_path_command chown 1000:1001 "$dir_path"
+  run_path_command chmod 2775 "$dir_path"
+}
+
+ensure_qbittorrent_download_layout() {
+  ensure_download_directory "/docker/downloads"
+  ensure_download_directory "/docker/downloads/unsorted"
+}
+
 expand_path_from_install_dir() {
   local path=$1
   case "$path" in
@@ -511,6 +534,7 @@ if [ -z "${INSTALLER_STATE_HOST_PATH:-}" ]; then
   INSTALLER_STATE_HOST_PATH="$(resolve_installer_state_host_path)"
 fi
 ensure_json_file "$INSTALLER_STATE_HOST_PATH" "$DEFAULT_INSTALLER_STATE_JSON"
+ensure_qbittorrent_download_layout
 
 echo
 info "Validating compose config"

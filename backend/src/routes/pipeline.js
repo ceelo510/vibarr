@@ -133,6 +133,106 @@ async function readUpstreamErrorMessage(resp, fallback) {
   return summarizeError(new Error(text)).message || fallback;
 }
 
+function hasEpisodeAired(episode, now = Date.now()) {
+  const airValue = episode?.airDateUtc || episode?.airDate;
+  if (!airValue) return false;
+  const airTime = Date.parse(airValue);
+  return Number.isFinite(airTime) && airTime <= now;
+}
+
+export async function prepareSonarrSearch(seriesId, seasonNumbers = null) {
+  const normalizedSeasonNumbers = Array.isArray(seasonNumbers) && seasonNumbers.length > 0
+    ? [...new Set(seasonNumbers.map(Number).filter(Number.isFinite))]
+    : null;
+  const seasonSet = normalizedSeasonNumbers ? new Set(normalizedSeasonNumbers) : null;
+
+  const seriesResp = await fetch(`${SONARR_HOST}/api/v3/series/${seriesId}?apikey=${SONARR_API_KEY}`);
+  if (!seriesResp.ok) {
+    throw new Error(await readUpstreamErrorMessage(seriesResp, `Failed to fetch series from Sonarr: HTTP ${seriesResp.status}`));
+  }
+  const seriesData = await seriesResp.json();
+
+  let seriesMonitoringChanged = false;
+  if (!seriesData.monitored) {
+    seriesData.monitored = true;
+    seriesMonitoringChanged = true;
+  }
+  for (const season of (seriesData.seasons || [])) {
+    if (season.seasonNumber === 0) continue;
+    const targeted = seasonSet ? seasonSet.has(season.seasonNumber) : true;
+    if (targeted && !season.monitored) {
+      season.monitored = true;
+      seriesMonitoringChanged = true;
+    }
+  }
+  if (seriesMonitoringChanged) {
+    const putResp = await fetch(`${SONARR_HOST}/api/v3/series/${seriesId}?apikey=${SONARR_API_KEY}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(seriesData),
+    });
+    if (!putResp.ok) {
+      throw new Error(await readUpstreamErrorMessage(putResp, `Failed to update Sonarr monitoring: HTTP ${putResp.status}`));
+    }
+  }
+
+  const allEpisodes = await fetchWithTimeout(`${SONARR_HOST}/api/v3/episode?seriesId=${seriesId}&apikey=${SONARR_API_KEY}`, 15000);
+  const targetEpisodes = (Array.isArray(allEpisodes) ? allEpisodes : []).filter((episode) => (
+    episode?.seasonNumber > 0 && (!seasonSet || seasonSet.has(episode.seasonNumber))
+  ));
+  const episodeIdsToMonitor = targetEpisodes
+    .filter((episode) => !episode.monitored)
+    .map((episode) => episode.id)
+    .filter(Number.isFinite);
+
+  if (episodeIdsToMonitor.length > 0) {
+    const monitorResp = await fetch(`${SONARR_HOST}/api/v3/episode/monitor?apikey=${SONARR_API_KEY}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ episodeIds: episodeIdsToMonitor, monitored: true }),
+    });
+    if (!monitorResp.ok) {
+      throw new Error(await readUpstreamErrorMessage(monitorResp, `Failed to update Sonarr episode monitoring: HTTP ${monitorResp.status}`));
+    }
+  }
+
+  const episodesBySeason = new Map();
+  for (const episode of targetEpisodes) {
+    const effectiveEpisode = episodeIdsToMonitor.includes(episode.id)
+      ? { ...episode, monitored: true }
+      : episode;
+    const seasonBucket = episodesBySeason.get(effectiveEpisode.seasonNumber) || [];
+    seasonBucket.push(effectiveEpisode);
+    episodesBySeason.set(effectiveEpisode.seasonNumber, seasonBucket);
+  }
+
+  const continuingSeries = seriesData.status === 'continuing' || seriesData.ended === false;
+  const requestedSeasons = normalizedSeasonNumbers || [...episodesBySeason.keys()].sort((a, b) => a - b);
+  const seasonSearches = requestedSeasons.map((seasonNumber) => {
+    const seasonEpisodes = episodesBySeason.get(seasonNumber) || [];
+    const missingReleasedEpisodeIds = seasonEpisodes
+      .filter((episode) => episode.monitored && !episode.hasFile && hasEpisodeAired(episode))
+      .map((episode) => episode.id)
+      .filter(Number.isFinite);
+    const useEpisodeSearch = continuingSeries && missingReleasedEpisodeIds.length > 0;
+    return {
+      seasonNumber,
+      mode: useEpisodeSearch ? 'episode' : 'season',
+      missingReleasedEpisodeIds,
+      cmdBody: useEpisodeSearch
+        ? { name: 'EpisodeSearch', episodeIds: missingReleasedEpisodeIds }
+        : { name: 'SeasonSearch', seriesId, seasonNumber },
+    };
+  });
+
+  return {
+    seriesData,
+    seriesMonitoringChanged,
+    episodeMonitoringChanged: episodeIdsToMonitor.length > 0,
+    seasonSearches,
+  };
+}
+
 export async function watchSonarrSearch(pendingKey, commandId, seriesId, seasonNumber, logId, seriesTitle) {
   const searchStart = Date.now();
   const deadline = searchStart + 4 * 60 * 1000;
@@ -697,9 +797,23 @@ router.post('/pipeline/:key/retry', async (req, res) => {
   if (!item) return res.status(404).json({ error: 'Pipeline item not found' });
   try {
     if (item.service === 'sonarr' && item.retryId && SONARR_API_KEY) {
-      const cmdBody = item.retrySeasonNumbers?.length
-        ? { name: 'SeasonSearch', seriesId: item.retryId, seasonNumber: item.retrySeasonNumbers[0] }
-        : { name: 'SeriesSearch', seriesId: item.retryId };
+      const retrySeasonNumbers = item.retrySeasonNumbers || item.seasonNumbers || null;
+      let cmdBody = { name: 'SeriesSearch', seriesId: item.retryId };
+      let retrySeasonNumber = null;
+      if (retrySeasonNumbers?.length) {
+        const searchPlan = await prepareSonarrSearch(item.retryId, retrySeasonNumbers);
+        const plannedSeasonSearch = searchPlan.seasonSearches[0];
+        cmdBody = plannedSeasonSearch?.cmdBody || { name: 'SeasonSearch', seriesId: item.retryId, seasonNumber: retrySeasonNumbers[0] };
+        retrySeasonNumber = plannedSeasonSearch?.seasonNumber ?? retrySeasonNumbers[0] ?? null;
+        if (item.logId) {
+          if (searchPlan.seriesMonitoringChanged || searchPlan.episodeMonitoringChanged) {
+            addLogStep(item.logId, `Re-enabled Sonarr monitoring before retrying season ${retrySeasonNumber}`, 'info');
+          }
+          if (plannedSeasonSearch?.mode === 'episode') {
+            addLogStep(item.logId, `Retrying released episodes individually for season ${retrySeasonNumber}`, 'info');
+          }
+        }
+      }
       const cmdResp = await fetch(`${SONARR_HOST}/api/v3/command?apikey=${SONARR_API_KEY}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(cmdBody),
@@ -711,7 +825,7 @@ router.post('/pipeline/:key/retry', async (req, res) => {
       advancePipeline(item.key, 'searching');
       addPipelineStep(item.key, 'Retry submitted — waiting for Sonarr search completion');
       if (item.logId) addLogStep(item.logId, 'Retrying search…', 'info');
-      watchSonarrSearch(item.key, cmdData.id, item.retryId, item.retrySeasonNumbers?.[0] ?? null, item.logId, item.title)
+      watchSonarrSearch(item.key, cmdData.id, item.retryId, retrySeasonNumber, item.logId, item.title)
         .catch((error) => handleWatcherCrash(item.key, 'sonarr-search-retry', error, {
           service: 'sonarr',
           title: item.title,
@@ -845,46 +959,27 @@ router.post('/command/search', async (req, res) => {
   let activeTitle = null;
   try {
     if (service === 'sonarr' && SONARR_API_KEY) {
-      const seriesResp = await fetch(`${SONARR_HOST}/api/v3/series/${id}?apikey=${SONARR_API_KEY}`);
-      if (!seriesResp.ok) {
-        throw new Error(await readUpstreamErrorMessage(seriesResp, `Failed to fetch series from Sonarr: HTTP ${seriesResp.status}`));
-      }
-      const seriesData = await seriesResp.json();
+      const searchPlan = await prepareSonarrSearch(id, seasonNumbers || null);
+      const { seriesData, seriesMonitoringChanged, episodeMonitoringChanged } = searchPlan;
       const seriesTitle = seriesData.title || 'Unknown';
       const seriesPosterUrl = pickArrImageUrl(seriesData.images || [], 'poster', 'sonarr');
       activeTitle = seriesTitle;
 
-      let monitoringChanged = false;
-      if (!seriesData.monitored) { seriesData.monitored = true; monitoringChanged = true; }
-      for (const season of (seriesData.seasons || [])) {
-        if (season.seasonNumber === 0) continue;
-        const targeted = seasonNumbers?.length ? seasonNumbers.includes(season.seasonNumber) : true;
-        if (targeted && !season.monitored) { season.monitored = true; monitoringChanged = true; }
-      }
-      if (monitoringChanged) {
-        const putResp = await fetch(`${SONARR_HOST}/api/v3/series/${id}?apikey=${SONARR_API_KEY}`, {
-          method: 'PUT', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(seriesData),
-        });
-        if (!putResp.ok) {
-          logServerEvent('warn', 'pipeline.search.monitoring_update_failed', {
-            service: 'sonarr',
-            seriesId: id,
-            title: seriesTitle,
-            status: putResp.status,
-          });
-        }
-      }
-
       if (seasonNumbers?.length) {
-        for (const sn of seasonNumbers) {
+        for (const seasonSearch of searchPlan.seasonSearches) {
+          const sn = seasonSearch.seasonNumber;
           const snLabel = seasonNumbers.length > 1 ? `${seriesTitle} S${sn}` : `${seriesTitle} Season ${sn}`;
           const logId = logActivity('download', `Searching: ${snLabel}`, { seriesId: id, season: sn }, 'pending', { service: 'sonarr', seriesId: id, season: sn, title: seriesTitle });
           activeLogId = logId;
-          if (monitoringChanged) addLogStep(logId, `Auto-enabled monitoring for ${snLabel}`, 'info');
+          if (seriesMonitoringChanged || episodeMonitoringChanged) {
+            addLogStep(logId, `Auto-enabled monitoring for ${snLabel}`, 'info');
+          }
+          if (seasonSearch.mode === 'episode') {
+            addLogStep(logId, `Searching ${seasonSearch.missingReleasedEpisodeIds.length} released episode(s) individually for ${snLabel}`, 'info');
+          }
           const cmdResp = await fetch(`${SONARR_HOST}/api/v3/command?apikey=${SONARR_API_KEY}`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: 'SeasonSearch', seriesId: id, seasonNumber: sn }),
+            body: JSON.stringify(seasonSearch.cmdBody),
           });
           if (!cmdResp.ok) throw new Error(await readUpstreamErrorMessage(cmdResp, `Sonarr command failed: HTTP ${cmdResp.status}`));
           const cmdData = await cmdResp.json();
@@ -904,7 +999,7 @@ router.post('/command/search', async (req, res) => {
       } else {
         const logId = logActivity('download', `Searching: ${seriesTitle}`, { seriesId: id }, 'pending', { service: 'sonarr', seriesId: id, title: seriesTitle });
         activeLogId = logId;
-        if (monitoringChanged) addLogStep(logId, `Auto-enabled monitoring for ${seriesTitle}`, 'info');
+        if (seriesMonitoringChanged || episodeMonitoringChanged) addLogStep(logId, `Auto-enabled monitoring for ${seriesTitle}`, 'info');
         const cmdResp = await fetch(`${SONARR_HOST}/api/v3/command?apikey=${SONARR_API_KEY}`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name: 'SeriesSearch', seriesId: id }),

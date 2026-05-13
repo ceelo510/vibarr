@@ -10,6 +10,7 @@ import {
   addPipelineItem, advancePipeline, registerInterval,
 } from '../state.js';
 import { searchAndDownloadSlskd } from './slskd.js';
+import { prepareSonarrSearch } from './pipeline.js';
 import { execFileSync } from 'child_process';
 import { statSync } from 'fs';
 
@@ -1242,14 +1243,27 @@ router.post('/add/series', async (req, res) => {
     addPipelineItem(pipelineKey, { service: 'sonarr', title: result.title, subtitle, posterUrl: seriesPoster, logId, seriesId: result.id, seasonNumbers: selectedSeasons || null, retryId: result.id });
     advancePipeline(pipelineKey, 'searching');
     const singleSeasonSearch = selectedSeasons?.length === 1;
-    const cmdBody = singleSeasonSearch
+    let searchSeasonNumber = singleSeasonSearch ? selectedSeasons[0] : null;
+    let cmdBody = singleSeasonSearch
       ? { name: 'SeasonSearch', seriesId: result.id, seasonNumber: selectedSeasons[0] }
       : { name: 'SeriesSearch', seriesId: result.id };
+    if (singleSeasonSearch) {
+      const searchPlan = await prepareSonarrSearch(result.id, selectedSeasons);
+      const plannedSeasonSearch = searchPlan.seasonSearches[0];
+      cmdBody = plannedSeasonSearch?.cmdBody || cmdBody;
+      searchSeasonNumber = plannedSeasonSearch?.seasonNumber ?? searchSeasonNumber;
+      if (searchPlan.episodeMonitoringChanged) {
+        addLogStep(logId, `Explicitly enabled Sonarr episode monitoring for season ${searchSeasonNumber}`, 'info');
+      }
+      if (plannedSeasonSearch?.mode === 'episode') {
+        addLogStep(logId, `Searching released episodes individually for season ${searchSeasonNumber}`, 'info');
+      }
+    }
     fetch(`${SONARR_HOST}/api/v3/command?apikey=${SONARR_API_KEY}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(cmdBody),
     }).then(r => r.json()).then(cmd => {
-      if (cmd?.id) watchSonarrSearch(pipelineKey, cmd.id, result.id, singleSeasonSearch ? selectedSeasons[0] : null, logId, result.title).catch(e => console.error('watchSonarrSearch add:', e.message));
+      if (cmd?.id) watchSonarrSearch(pipelineKey, cmd.id, result.id, singleSeasonSearch ? searchSeasonNumber : null, logId, result.title).catch(e => console.error('watchSonarrSearch add:', e.message));
     }).catch(() => {});
 
     res.json({ success: true, id: result.id, title: result.title });
