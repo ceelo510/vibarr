@@ -10,6 +10,7 @@ if (typeof document !== 'undefined' && !document.getElementById('library-shimmer
 
 import { formatBytes, gradientFor, extractRating, detectQualityLabel } from './utils';
 import { apiFetch, apiPost, getApiErrorDetails } from './api';
+import PosterImage from './PosterImage';
 
 function useAnimatedClose(onClose, duration = 200) {
   const [closing, setClosing] = useState(false);
@@ -74,25 +75,16 @@ function LibraryErrorNotice({ error, title, tone = 'error' }) {
 // ── Shared Poster Component ─────────────────────────────────────────────────
 
 function PosterImg({ url, fallbackIcon, title }) {
-  const [failed, setFailed] = useState(false);
-  useEffect(() => { setFailed(false); }, [url]);
-  if (!url || failed) {
-    return (
-      <div className="absolute inset-0 flex items-center justify-center" style={{ background: gradientFor(title) }}>
-        <span className="material-symbols-rounded" style={{ fontSize: 40, fontVariationSettings: "'FILL' 1", color: "rgba(255,255,255,0.25)" }}>{fallbackIcon}</span>
-      </div>
-    );
-  }
-  const src = url.startsWith('/api/') ? url : `/api/poster?url=${encodeURIComponent(url)}`;
   return (
-    <img
-        src={src}
-        alt={title}
-        decoding="async"
-        onError={() => setFailed(true)}
-        className="absolute inset-0 w-full h-full object-cover"
-        style={{ opacity: 1, transition: 'opacity 320ms ease-out' }}
-      />
+    <PosterImage
+      url={url}
+      title={title}
+      icon={fallbackIcon}
+      className="absolute inset-0"
+      imgStyle={{ opacity: 1, transition: 'opacity 320ms ease-out' }}
+      fallbackClassName="absolute inset-0 flex items-center justify-center"
+      fallbackStyle={{ background: gradientFor(title) }}
+    />
   );
 }
 
@@ -674,15 +666,13 @@ function SeriesDetail({ seriesId, onClose, onDelete }) {
                               >
                                 <div className="flex items-center gap-2 text-[12px]">
                                   {ep.imageUrl && (
-                                    <div className="w-[72px] h-[40px] rounded flex-none overflow-hidden relative bg-bg-surface-2 flex-shrink-0">
-                                      <img
-                                        src={ep.imageUrl}
-                                        alt=""
-                                        className="absolute inset-0 w-full h-full object-cover"
-                                        loading="eager"
-                                        onError={e => { e.target.style.display = 'none'; e.target.parentElement.style.display = 'none'; }}
-                                      />
-                                    </div>
+                                    <PosterImage
+                                      url={ep.imageUrl}
+                                      title={ep.title}
+                                      icon="tv"
+                                      className="w-[72px] h-[40px] rounded flex-none bg-bg-surface-2 flex-shrink-0"
+                                      imgClassName="absolute inset-0 w-full h-full object-cover"
+                                    />
                                   )}
                                   <span className="font-mono text-text-muted w-8 text-right flex-none">E{String(ep.episodeNumber).padStart(2, '0')}</span>
                                   <span className={`w-2 h-2 rounded-full flex-none ${ep.hasFile ? 'bg-accent-green' : 'bg-border-medium'}`} />
@@ -1000,15 +990,13 @@ function ArtistDetail({ artistId, onClose, onDelete }) {
                     ) : (
                       <span className="material-symbols-rounded text-accent-green flex-none" style={{ fontSize: 16 }}>check_circle</span>
                     )}
-                    <div className="w-12 h-12 rounded-md overflow-hidden relative flex-none bg-bg-surface-2">
-                      {a.coverUrl ? (
-                        <img src={a.coverUrl.startsWith('/api/') ? a.coverUrl : `/api/poster?url=${encodeURIComponent(a.coverUrl)}`} alt={a.title} className="w-full h-full object-cover" />
-                      ) : (
-                        <div className="w-full h-full flex items-center justify-center">
-                          <span className="material-symbols-rounded text-border-medium" style={{ fontSize: 24, fontVariationSettings: "'FILL' 1" }}>album</span>
-                        </div>
-                      )}
-                    </div>
+                    <PosterImage
+                      url={a.coverUrl}
+                      title={a.title}
+                      icon="album"
+                      className="w-12 h-12 rounded-md flex-none bg-bg-surface-2"
+                      fallbackClassName="w-full h-full flex items-center justify-center"
+                    />
                     <div className="flex-1 min-w-0">
                       <p className="text-[13px] font-medium text-text-primary truncate">{a.title}</p>
                       <p className="text-[11px] text-text-muted">
@@ -1129,9 +1117,12 @@ function ArtistDetail({ artistId, onClose, onDelete }) {
                                 onChange={() => setDiscoverSelected(prev => prev.includes(a.id) ? prev.filter(id => id !== a.id) : [...prev, a.id])}
                                 className="w-3.5 h-3.5 rounded border-border-medium text-accent-blue focus:ring-accent-blue/30 cursor-pointer flex-none"
                               />
-                              {a.coverUrl && (
-                                <img src={'/api/poster?url=' + encodeURIComponent(a.coverUrl)} alt="" className="w-11 h-11 rounded-lg object-cover flex-none" onError={e => { e.target.style.display = 'none'; }} />
-                              )}
+                              <PosterImage
+                                url={a.coverUrl}
+                                title={a.title}
+                                icon="album"
+                                className="w-11 h-11 rounded-lg flex-none bg-bg-surface-2"
+                              />
                               <div className="flex-1 min-w-0">
                                 <span className="text-[12px] text-text-primary block truncate">{a.title.replace(/ - (Single|EP)$/i, '')}</span>
                                 <span className="text-[10px] text-text-muted">
@@ -1510,9 +1501,12 @@ function AddPanel({ item, mediaType, onClose, onAdded }) {
                           onChange={() => setSelectedAlbumIds(prev => prev.includes(a.id) ? prev.filter(id => id !== a.id) : [...prev, a.id])}
                           className="w-3.5 h-3.5 rounded border-border-medium text-accent-blue focus:ring-accent-blue/30 cursor-pointer flex-none"
                         />
-                        {a.coverUrl && (
-                          <img src={'/api/poster?url=' + encodeURIComponent(a.coverUrl)} alt="" className="w-11 h-11 rounded-lg object-cover flex-none" onError={e => { e.target.style.display = 'none'; }} />
-                        )}
+                        <PosterImage
+                          url={a.coverUrl}
+                          title={a.title}
+                          icon="album"
+                          className="w-11 h-11 rounded-lg flex-none bg-bg-surface-2"
+                        />
                         <div className="flex-1 min-w-0">
                           <span className="text-[12px] text-text-primary block truncate">{a.title.replace(/ - (Single|EP)$/i, '')}</span>
                           <span className="text-[10px] text-text-muted">
@@ -2261,7 +2255,7 @@ export default function Library({
         </div>
 
         {/* Search + filters */}
-        <div className="flex items-center gap-4">
+        <div className="flex flex-wrap items-center gap-4">
           <div className="flex-1 relative">
             <span className="absolute left-3 top-1/2 -translate-y-1/2 material-symbols-rounded text-text-muted" style={{ fontSize: 20 }}>search</span>
             <input
@@ -2294,7 +2288,7 @@ export default function Library({
           )}
 
           {/* Type filter */}
-          <div className="flex gap-1">
+          <div className="flex flex-wrap gap-1">
             {mode === 'library' ? (
               availableLibraryFilters.map(f => (
                 <button
@@ -2324,7 +2318,8 @@ export default function Library({
             )}
           </div>
         </div>
-        {(unavailableServices.length > 0 || libraryError || lookupError || isServiceIssueStatus(activeLibraryIssue?.status)) && (
+        {(((unavailableServices.length > 0) && !(mode === 'library' && initialLoaded && totalLibrary === 0 && libraryModeUnavailable) && !(mode === 'add' && addModeUnavailable))
+          || libraryError || lookupError || isServiceIssueStatus(activeLibraryIssue?.status)) && (
           <div className="mt-3 rounded-2xl border border-border-subtle bg-bg-card/80 px-4 py-3">
             {unavailableServices.length > 0 && (
               <p className="text-[12px] text-text-secondary">
@@ -2392,40 +2387,77 @@ export default function Library({
             </div>
           )}
           {initialLoaded && !loading && totalLibrary === 0 && (
-            <div className="flex flex-col items-center justify-center py-20 text-text-muted">
-              <span className="material-symbols-rounded mb-3" style={{ fontSize: 48, fontVariationSettings: "'FILL' 1" }}>
-                {isLibraryEmptyWelcome ? 'playlist_add' : libraryError || isServiceIssueStatus(activeLibraryIssue?.status) ? 'cloud_off' : isMissingFilter ? 'task_alt' : 'search_off'}
-              </span>
-              <p className="text-[14px]">
-                {isLibraryEmptyWelcome
-                  ? 'Your library is empty.'
-                  : libraryModeUnavailable
-                  ? 'No library services are configured yet.'
-                  : activeLibraryIssue?.status === 'unconfigured'
-                    ? 'That library service is not configured yet.'
-                    : libraryError || isServiceIssueStatus(activeLibraryIssue?.status)
-                      ? 'Library data is temporarily unavailable for this view.'
-                    : isMissingFilter
-                    ? 'Nothing missing — library is complete!'
-                      : `No media found${query ? ` for "${query}"` : ''}`}
-              </p>
+            <div className="max-w-[760px] mx-auto py-14">
               {libraryModeUnavailable || activeLibraryIssue?.status === 'unconfigured' ? (
-                <p className="text-[12px] mt-1">
-                  Configure Radarr, Sonarr, or Lidarr through backend `.env` values, restart the API, then refresh this view.
-                  <button onClick={() => onOpenSettings?.()} className="ml-1 text-accent-blue hover:underline">View setup status</button>
-                </p>
-              ) : libraryError || isServiceIssueStatus(activeLibraryIssue?.status) ? (
-                  <p className="text-[12px] mt-1">
-                    Existing results stay visible when possible, but this request did not complete cleanly.
-                    <button onClick={handleRefresh} className="ml-1 text-accent-blue hover:underline">Retry now</button>
+                <div className="rounded-[24px] border border-border-subtle bg-bg-card/80 px-6 py-6 text-text-muted">
+                  <div className="flex items-start gap-4">
+                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-white/[0.06] text-text-primary">
+                      <span className="material-symbols-rounded" style={{ fontSize: 26, fontVariationSettings: "'FILL' 1" }}>tune</span>
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="text-[18px] font-semibold text-text-primary">Connect your library services</h3>
+                        <span className="rounded-full border border-border-subtle bg-white/[0.04] px-2.5 py-1 text-[11px] font-medium text-text-secondary">
+                          Radarr / Sonarr / Lidarr
+                        </span>
+                      </div>
+                      <p className="mt-2 text-[13px] text-text-secondary">
+                        This view is ready, but the backend does not have library endpoints configured yet. Once those services are connected, browsing and missing-item triage will populate here automatically.
+                      </p>
+                      <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                        <div className="rounded-2xl border border-border-subtle bg-white/[0.03] px-4 py-3">
+                          <p className="text-[11px] font-semibold uppercase tracking-wide text-text-muted">Configure</p>
+                          <p className="mt-1 text-[12px] text-text-secondary">Add the Arr URLs and API keys in backend `.env`.</p>
+                        </div>
+                        <div className="rounded-2xl border border-border-subtle bg-white/[0.03] px-4 py-3">
+                          <p className="text-[11px] font-semibold uppercase tracking-wide text-text-muted">Restart</p>
+                          <p className="mt-1 text-[12px] text-text-secondary">Restart the API so the new service bindings are picked up.</p>
+                        </div>
+                        <div className="rounded-2xl border border-border-subtle bg-white/[0.03] px-4 py-3">
+                          <p className="text-[11px] font-semibold uppercase tracking-wide text-text-muted">Refresh</p>
+                          <p className="mt-1 text-[12px] text-text-secondary">Return here to browse the live catalog and missing items.</p>
+                        </div>
+                      </div>
+                      <div className="mt-5">
+                        <button
+                          onClick={() => onOpenSettings?.()}
+                          className="inline-flex items-center gap-2 rounded-xl border border-accent-blue/25 bg-accent-blue/10 px-4 py-2 text-[12px] font-semibold text-accent-blue transition-colors hover:bg-accent-blue/16"
+                        >
+                          <span className="material-symbols-rounded" style={{ fontSize: 16 }}>settings</span>
+                          View setup status
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex flex-col items-center justify-center py-20 text-text-muted">
+                  <span className="material-symbols-rounded mb-3" style={{ fontSize: 48, fontVariationSettings: "'FILL' 1" }}>
+                    {isLibraryEmptyWelcome ? 'playlist_add' : libraryError || isServiceIssueStatus(activeLibraryIssue?.status) ? 'cloud_off' : isMissingFilter ? 'task_alt' : 'search_off'}
+                  </span>
+                  <p className="text-[14px]">
+                    {isLibraryEmptyWelcome
+                      ? 'Your library is empty.'
+                      : libraryError || isServiceIssueStatus(activeLibraryIssue?.status)
+                        ? 'Library data is temporarily unavailable for this view.'
+                        : isMissingFilter
+                          ? 'Nothing missing — library is complete!'
+                          : `No media found${query ? ` for "${query}"` : ''}`}
                   </p>
-              ) : isLibraryEmptyWelcome ? (
-                <p className="text-[12px] mt-1">
-                  Get started by searching and adding something to your library.
-                  <button onClick={jumpToAddMode} className="ml-1 text-accent-blue hover:underline">Add New</button>
-                </p>
-              ) : !isMissingFilter && (
-                <p className="text-[12px] mt-1">Try a different search, or switch to <button onClick={jumpToAddMode} className="text-accent-blue hover:underline">Add New</button></p>
+                  {libraryError || isServiceIssueStatus(activeLibraryIssue?.status) ? (
+                    <p className="text-[12px] mt-1">
+                      Existing results stay visible when possible, but this request did not complete cleanly.
+                      <button onClick={handleRefresh} className="ml-1 text-accent-blue hover:underline">Retry now</button>
+                    </p>
+                  ) : isLibraryEmptyWelcome ? (
+                    <p className="text-[12px] mt-1">
+                      Get started by searching and adding something to your library.
+                      <button onClick={jumpToAddMode} className="ml-1 text-accent-blue hover:underline">Add New</button>
+                    </p>
+                  ) : !isMissingFilter && (
+                    <p className="text-[12px] mt-1">Try a different search, or switch to <button onClick={jumpToAddMode} className="text-accent-blue hover:underline">Add New</button></p>
+                  )}
+                </div>
               )}
             </div>
           )}
@@ -2436,10 +2468,48 @@ export default function Library({
       {mode === 'add' && (
         <div className="px-8 py-6 min-h-[760px]">
           {addModeUnavailable && (
-            <div className="flex flex-col items-center justify-center py-20 text-text-muted">
-              <span className="material-symbols-rounded mb-3" style={{ fontSize: 48, fontVariationSettings: "'FILL' 1" }}>settings</span>
-              <p className="text-[14px]">No add services are configured yet.</p>
-              <p className="text-[12px] mt-1">Configure Radarr, Sonarr, or Lidarr through backend `.env` values, restart the API, then <button onClick={() => onOpenSettings?.()} className="text-accent-blue hover:underline">view setup status</button>.</p>
+            <div className="max-w-[760px] mx-auto py-14">
+              <div className="rounded-[24px] border border-border-subtle bg-bg-card/80 px-6 py-6 text-text-muted">
+                <div className="flex items-start gap-4">
+                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-white/[0.06] text-text-primary">
+                    <span className="material-symbols-rounded" style={{ fontSize: 26, fontVariationSettings: "'FILL' 1" }}>settings</span>
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="text-[18px] font-semibold text-text-primary">Enable acquisition services</h3>
+                      <span className="rounded-full border border-border-subtle bg-white/[0.04] px-2.5 py-1 text-[11px] font-medium text-text-secondary">
+                        Required for Add New
+                      </span>
+                    </div>
+                    <p className="mt-2 text-[13px] text-text-secondary">
+                      Add mode pulls live results from Radarr, Sonarr, or Lidarr. Until at least one of those services is configured, search stays disabled to avoid sending you into a dead-end flow.
+                    </p>
+                    <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                      <div className="rounded-2xl border border-border-subtle bg-white/[0.03] px-4 py-3">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-text-muted">Endpoint</p>
+                        <p className="mt-1 text-[12px] text-text-secondary">Point the backend at the Arr service URL.</p>
+                      </div>
+                      <div className="rounded-2xl border border-border-subtle bg-white/[0.03] px-4 py-3">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-text-muted">Auth</p>
+                        <p className="mt-1 text-[12px] text-text-secondary">Provide the matching API key in backend `.env`.</p>
+                      </div>
+                      <div className="rounded-2xl border border-border-subtle bg-white/[0.03] px-4 py-3">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-text-muted">Return</p>
+                        <p className="mt-1 text-[12px] text-text-secondary">Refresh this view to start searching the live catalog.</p>
+                      </div>
+                    </div>
+                    <div className="mt-5">
+                      <button
+                        onClick={() => onOpenSettings?.()}
+                        className="inline-flex items-center gap-2 rounded-xl border border-accent-blue/25 bg-accent-blue/10 px-4 py-2 text-[12px] font-semibold text-accent-blue transition-colors hover:bg-accent-blue/16"
+                      >
+                        <span className="material-symbols-rounded" style={{ fontSize: 16 }}>tune</span>
+                        View setup status
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
           )}
           {loading && (
@@ -2454,12 +2524,43 @@ export default function Library({
             </div>
           )}
           {!addModeUnavailable && !loading && !query.trim() && (
-            <div className="flex flex-col items-center justify-center py-20 text-text-muted">
-              <span className="material-symbols-rounded mb-3" style={{ fontSize: 48, fontVariationSettings: "'FILL' 1" }}>
-                {addType === 'movie' ? 'movie' : addType === 'series' ? 'tv' : 'album'}
-              </span>
-              <p className="text-[14px]">Search for {addType === 'movie' ? 'movies' : addType === 'series' ? 'TV shows' : 'music'} to add</p>
-              <p className="text-[12px] mt-1">Results from {addType === 'movie' ? 'Radarr' : addType === 'series' ? 'Sonarr' : 'Lidarr'}</p>
+            <div className="max-w-[720px] mx-auto py-16">
+              <div className="rounded-[20px] border border-border-subtle bg-bg-card/80 px-6 py-6">
+                <div className="flex items-start gap-4">
+                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-white/[0.06] text-text-primary">
+                    <span className="material-symbols-rounded" style={{ fontSize: 26, fontVariationSettings: "'FILL' 1" }}>
+                      {addType === 'movie' ? 'movie' : addType === 'series' ? 'tv' : 'album'}
+                    </span>
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="text-[18px] font-semibold text-text-primary">
+                        Add {addType === 'movie' ? 'films' : addType === 'series' ? 'TV shows' : 'music'}
+                      </h3>
+                      <span className="rounded-full border border-border-subtle bg-white/[0.04] px-2.5 py-1 text-[11px] font-medium text-text-secondary">
+                        Powered by {addType === 'movie' ? 'Radarr' : addType === 'series' ? 'Sonarr' : 'Lidarr'}
+                      </span>
+                    </div>
+                    <p className="mt-2 text-[13px] text-text-secondary">
+                      Search by title, artist, or release name. Existing library matches stay visible so you can avoid duplicates and jump straight into the next acquisition.
+                    </p>
+                    <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                      <div className="rounded-2xl border border-border-subtle bg-white/[0.03] px-4 py-3">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-text-muted">Search</p>
+                        <p className="mt-1 text-[12px] text-text-secondary">Use the field above to query the live catalog.</p>
+                      </div>
+                      <div className="rounded-2xl border border-border-subtle bg-white/[0.03] px-4 py-3">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-text-muted">Review</p>
+                        <p className="mt-1 text-[12px] text-text-secondary">Check quality, year, and library status before adding.</p>
+                      </div>
+                      <div className="rounded-2xl border border-border-subtle bg-white/[0.03] px-4 py-3">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-text-muted">Queue</p>
+                        <p className="mt-1 text-[12px] text-text-secondary">Send the selection into the pipeline and track it from Downloads.</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
           )}
           {!addModeUnavailable && !loading && lookupResults.length > 0 && (
@@ -2501,7 +2602,12 @@ export default function Library({
                 });
               })() : (
                 <div>
-                  <p className="text-[11px] text-text-muted mb-3">{lookupResults.length} result{lookupResults.length !== 1 ? 's' : ''}</p>
+                  <div className="mb-3 flex flex-wrap items-center gap-2">
+                    <p className="text-[11px] text-text-muted">{lookupResults.length} result{lookupResults.length !== 1 ? 's' : ''}</p>
+                    <span className="rounded-full border border-border-subtle bg-white/[0.04] px-2 py-1 text-[10px] font-medium text-text-secondary">
+                      Source: {addType === 'movie' ? 'Radarr' : addType === 'series' ? 'Sonarr' : 'Lidarr'}
+                    </span>
+                  </div>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 16 }}>
                     {lookupResults.map((item, i) => (
                       <ResultCard key={`${item.tmdbId || item.tvdbId || item.foreignArtistId || "x"}-${i}-${item.title || item.artistName || ""}`} item={item} mediaType={addType} onClick={() => setAddPanel(item)} />

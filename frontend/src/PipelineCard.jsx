@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { formatSpeed } from './utils';
+import PosterImage from './PosterImage';
 
 /** Reactive prefers-reduced-motion hook. */
 function useReducedMotion() {
@@ -91,6 +92,7 @@ function PipelineCard({ item, expanded, onToggle, onRetry, onCancel, onMonitor, 
   // Get most recent step message for prominent display
   // Steps append oldest -> newest, so the tail becomes the collapsed summary line.
   const latestStep = useMemo(() => item.steps?.length > 0 ? item.steps[item.steps.length - 1] : null, [item.steps]);
+  const activityMessage = latestStep?.message || item.statusDetail || (isSearching ? 'Preparing search…' : null);
 
   // Stage dots for compact trail
   const stageDots = PIPELINE_STAGE_ORDER.filter(s => s !== 'complete');
@@ -112,15 +114,12 @@ function PipelineCard({ item, expanded, onToggle, onRetry, onCancel, onMonitor, 
         onClick={onToggle}
       >
         {/* Poster */}
-        <div style={{ width: 38, height: 54, borderRadius: 5, background: 'rgba(255,255,255,0.07)', flexShrink: 0, overflow: 'hidden', position: 'relative' }}>
-          {item.posterUrl
-            ? <img src={item.posterUrl.startsWith('/api/') ? item.posterUrl : `/api/poster?url=${encodeURIComponent(item.posterUrl)}`}
-                alt={item.title} decoding="async" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-            : <span className="material-symbols-rounded" style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, color: 'rgba(255,255,255,0.2)', fontVariationSettings: "'FILL' 1" }}>
-                {item.service === 'sonarr' ? 'tv' : item.service === 'radarr' ? 'movie' : 'album'}
-              </span>
-          }
-        </div>
+        <PosterImage
+          url={item.posterUrl}
+          title={item.title}
+          icon={item.service === 'sonarr' ? 'tv' : item.service === 'radarr' ? 'movie' : 'album'}
+          style={{ width: 38, height: 54, borderRadius: 5, flexShrink: 0 }}
+        />
 
         {/* Content */}
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -192,7 +191,7 @@ function PipelineCard({ item, expanded, onToggle, onRetry, onCancel, onMonitor, 
           </div>
 
           {/* Row 3: Current activity message — most informative part */}
-          {latestStep && !isComplete && !isStuck && (
+          {activityMessage && !isComplete && !isStuck && (
             <div style={{
               fontSize: 11, color: isSearching ? 'rgba(235,235,245,0.55)' : 'rgba(235,235,245,0.45)',
               lineHeight: 1.35, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
@@ -200,7 +199,7 @@ function PipelineCard({ item, expanded, onToggle, onRetry, onCancel, onMonitor, 
               {isSearching && (
                 <span style={{ display: 'inline-block', width: 4, height: 4, borderRadius: '50%', background: svcColor, marginRight: 5, verticalAlign: 'middle', animation: reduced ? 'none' : 'pulse 1.2s ease-in-out infinite' }} />
               )}
-              {latestStep.message}
+              {activityMessage}
             </div>
           )}
 
@@ -365,6 +364,8 @@ function arePropsEqual(prev, next) {
     a.posterUrl !== b.posterUrl ||
     a.stuckReason !== b.stuckReason ||
     a.canRetry !== b.canRetry ||
+    a.statusDetail !== b.statusDetail ||
+    a.statusUpdatedAt !== b.statusUpdatedAt ||
     a.stageStartedAt !== b.stageStartedAt ||
     a.startedAt !== b.startedAt
   ) return false;

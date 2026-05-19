@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback, useId } from 'react';
-import { formatSpeed, getTorrentState, formatBytes, gradientFor, timeAgo } from './utils';
+import { formatSpeed, getTorrentState, formatBytes, timeAgo } from './utils';
+import PosterImage from './PosterImage';
 
 const DOT_COLOR = {
   success: '#30d158',
@@ -22,28 +23,20 @@ const ACTIVE_DOWNLOAD_BLUE = '#0a84ff';
 const ACTIVE_DOWNLOAD_BLUE_SOFT = '#5ac8fa';
 
 const Thumb = React.memo(function Thumb({ url, title, square }) {
-  const [failed, setFailed] = useState(false);
-  useEffect(() => { setFailed(false); }, [url]);
   const size = square ? { width: 44, height: 44 } : { width: 36, height: 50 };
-  const src = url
-    ? (url.startsWith('/api/') ? url : `/api/poster?url=${encodeURIComponent(url)}`)
-    : null;
   const initials = (title || '?').trim().split(/\s+/).slice(0, 2).map(w => w[0]).join('').toUpperCase();
   return (
-    <div style={{
-      ...size, borderRadius: 6, flexShrink: 0, overflow: 'hidden', position: 'relative',
-      background: gradientFor(title || ''),
-      boxShadow: '0 2px 6px rgba(0,0,0,0.45), inset 0 0 0 1px rgba(255,255,255,0.06)',
-    }}>
-      {src && !failed && (
-        <img
-          src={src}
-          alt={title || ''} decoding="async"
-          onError={() => setFailed(true)}
-          style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
-        />
-      )}
-      {(!src || failed) && (
+    <PosterImage
+      url={url}
+      title={title}
+      icon={square ? 'album' : 'movie'}
+      style={{
+        ...size,
+        borderRadius: 6,
+        flexShrink: 0,
+        boxShadow: '0 2px 6px rgba(0,0,0,0.45), inset 0 0 0 1px rgba(255,255,255,0.06)',
+      }}
+      fallback={(
         <div style={{
           position: 'absolute', inset: 0, display: 'flex',
           alignItems: 'center', justifyContent: 'center',
@@ -53,7 +46,7 @@ const Thumb = React.memo(function Thumb({ url, title, square }) {
           {initials}
         </div>
       )}
-    </div>
+    />
   );
 });
 

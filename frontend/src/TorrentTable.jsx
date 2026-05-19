@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, memo } from 'react';
 import { formatBytes, formatSpeed, formatETA, getTorrentState, gradientFor, extractRating } from './utils';
 import { getServiceUrl } from './constants';
+import PosterImage from './PosterImage';
 
 const STATE_COLOR = { downloading: '#30d158', seeding: '#ff9f0a', paused: '#636366', completed: '#0a84ff', error: '#ff453a' };
 const STATE_LABEL = { downloading: 'Downloading', seeding: 'Seeding', paused: 'Paused', completed: 'Completed', error: 'Error' };
@@ -46,18 +47,14 @@ function PosterPlaceholder({ category, title }) {
 }
 
 const CardPoster = memo(function CardPoster({ url, category, title }) {
-  const [failed, setFailed] = useState(false);
-  // Retry image loads when refreshed metadata points at a new poster URL.
-  useEffect(() => { setFailed(false); }, [url]);
-  if (!url || failed) return <PosterPlaceholder category={category} title={title} />;
   return (
-    <img
-      src={url.startsWith('/api/') ? url : `/api/poster?url=${encodeURIComponent(url)}`}
-      alt={title ? `${title} poster` : 'Media poster'}
+    <PosterImage
+      url={url}
+      title={title}
+      icon={category?.includes('sonarr') ? 'tv' : category?.includes('lidarr') ? 'album' : 'movie'}
       loading="eager"
-      decoding="async"
-      className="absolute inset-0 w-full h-full object-cover"
-      onError={() => setFailed(true)}
+      className="absolute inset-0"
+      fallback={<PosterPlaceholder category={category} title={title} />}
     />
   );
 });
@@ -268,7 +265,7 @@ const DownloadCard = memo(function DownloadCard({ torrent, info, sortData, onAct
 
       {/* Poster area */}
       <div className="relative" style={{ height: 360 }}>
-        <CardPoster url={info?.posterUrl} category={torrent.category} title={info?.title} />
+        <CardPoster url={info?.posterUrl || torrent.posterUrl} category={torrent.category} title={displayTitle} />
 
         {/* Hover controls overlay */}
         {hovered && (
@@ -491,10 +488,11 @@ function groupByShow(torrents, getInfo) {
   torrents.forEach(t => {
     const info = getInfo(t.hash);
     const key = info?.title ?? extractSeriesName(t.name);
-    if (!map.has(key)) map.set(key, { key, torrents: [], info: null });
+    if (!map.has(key)) map.set(key, { key, torrents: [], info: null, posterUrl: null });
     const g = map.get(key);
     g.torrents.push(t);
     if (!g.info && info) g.info = info;
+    if (!g.posterUrl) g.posterUrl = info?.posterUrl || t.posterUrl || null;
   });
   return Array.from(map.values());
 }
@@ -502,7 +500,7 @@ function groupByShow(torrents, getInfo) {
 // ── Grouped Download Card ────────────────────────────────────────────────────
 
 const GroupedDownloadCard = memo(function GroupedDownloadCard({ group, getInfo, onAction }) {
-  const { torrents, info, key } = group;
+  const { torrents, info, key, posterUrl } = group;
   const [hovered, setHovered] = useState(false);
   const [ctrlBusy, setCtrlBusy] = useState(false);
 
@@ -539,7 +537,7 @@ const GroupedDownloadCard = memo(function GroupedDownloadCard({ group, getInfo, 
     >
       {/* ── Poster ── */}
       <div className="relative" style={{ height: 260 }}>
-        <CardPoster url={info?.posterUrl} category={torrents[0]?.category} title={displayTitle} />
+        <CardPoster url={info?.posterUrl || posterUrl} category={torrents[0]?.category} title={displayTitle} />
 
         {/* Pause/Resume all overlay on hover */}
         {hovered && (

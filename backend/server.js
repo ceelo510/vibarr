@@ -8,7 +8,7 @@ import {
   setupGracefulShutdown,
 } from './src/middleware.js';
 import { loadBwLifetime, loadPersistedActivityLog, logServerEvent } from './src/state.js';
-import { restoreQueueAlertsFromActivityLog } from './src/pipeline.js';
+import { restoreQueueAlertsFromActivityLog } from './src/routes/pipeline.js';
 import mountRoutes from './src/routes/index.js';
 
 const app = express();

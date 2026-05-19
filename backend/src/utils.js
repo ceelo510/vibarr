@@ -66,16 +66,27 @@ export function arrDelete(url, apiKey) {
 export function pickImageUrl(images, coverType) {
   const img = images?.find(i => i.coverType === coverType);
   if (!img) return null;
-  if (img.remoteUrl && /^https?:\/\//i.test(img.remoteUrl)) return img.remoteUrl;
-  if (img.url && /^https?:\/\//i.test(img.url)) return img.url;
+  if (img.remoteUrl && /^https?:\/\/|^\/\//i.test(img.remoteUrl)) {
+    return img.remoteUrl.startsWith('//') ? `https:${img.remoteUrl}` : img.remoteUrl;
+  }
+  if (img.url && /^https?:\/\/|^\/\//i.test(img.url)) {
+    return img.url.startsWith('//') ? `https:${img.url}` : img.url;
+  }
   return null;
 }
 
 export function pickArrImageUrl(images, coverType, service) {
   const img = images?.find(i => i.coverType === coverType);
   if (!img) return null;
-  if (img.remoteUrl && img.remoteUrl.startsWith('http')) return img.remoteUrl;
-  if (img.url) return '/api/arr-image/' + service + img.url;
+  if (img.remoteUrl && /^https?:\/\/|^\/\//i.test(img.remoteUrl)) {
+    return img.remoteUrl.startsWith('//') ? `https:${img.remoteUrl}` : img.remoteUrl;
+  }
+  if (img.url) {
+    if (/^https?:\/\/|^\/\//i.test(img.url)) {
+      return img.url.startsWith('//') ? `https:${img.url}` : img.url;
+    }
+    return '/api/arr-image/' + service + (img.url.startsWith('/') ? '' : '/') + img.url;
+  }
   return null;
 }
 

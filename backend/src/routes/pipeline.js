@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { CONFIG, TIMING } from '../config.js';
 import { fetchWithTimeout, pickArrImageUrl, qbittorrentLogin } from '../utils.js';
+import { scheduleLibraryRefresh } from '../libraryRefresh.js';
 import {
   getPipeline, getPipelineItem, addPipelineItem, advancePipeline,
   completePipeline, removePipelineItem, setPipelineStuck,
@@ -30,31 +31,67 @@ const STUCK_REASONS = {
   importing_timeout:    'Import taking longer than usual. Check available disk space and file permissions.',
 };
 
+const ARR_COMMAND_POLL_INTERVAL_MS = 5000;
+const ARR_COMMAND_STATUS_STEP_INTERVAL_MS = 20000;
+const DIRECT_RELEASE_TIMEOUT_MS = 45000;
+const LIBRARY_REFRESH_DELAY_MS = 15000;
+
+function releaseQualityName(release) {
+  return release?.quality?.quality?.name || release?.quality?.name || release?.qualityVersion || 'Unknown';
+}
+
+function releaseShortTitle(release, max = 96) {
+  const title = release?.title || release?.sourceTitle || 'release';
+  return title.length > max ? `${title.slice(0, max - 1)}…` : title;
+}
+
+function categorizeRejection(reason = '') {
+  const lower = String(reason).toLowerCase();
+  if (lower.includes('alias')) return 'title alias conflict';
+  if (lower.includes('seeders')) return 'no seeders';
+  if (lower.includes('not wanted in profile') || lower.includes('quality')) return 'quality profile mismatch';
+  if (lower.includes('unknown')) return 'unrecognized release';
+  if (lower.includes('wrong season')) return 'wrong season';
+  if (lower.includes('existing file')) return 'already at cutoff quality';
+  if (lower.includes('episode wasn')) return 'episode not monitored';
+  return 'other';
+}
+
+function summarizeReleaseRejections(releases) {
+  if (!Array.isArray(releases) || releases.length === 0) return null;
+  const approved = releases.filter(r => !r.rejected);
+  if (approved.length > 0) {
+    return `${approved.length} release${approved.length !== 1 ? 's' : ''} approved — may be grabbing now, check downloads`;
+  }
+
+  const counts = {};
+  for (const r of releases) {
+    const reasons = r.rejections?.length ? r.rejections : ['other'];
+    for (const reason of reasons) {
+      const cat = categorizeRejection(reason);
+      counts[cat] = (counts[cat] || 0) + 1;
+    }
+  }
+
+  const parts = Object.entries(counts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([k, v]) => `${v} ${k}`);
+  const topSeeded = releases
+    .slice()
+    .sort((a, b) => (b.seeders || 0) - (a.seeders || 0))[0];
+  const topReasons = (topSeeded?.rejections || []).slice(0, 2).join('; ');
+  const topBits = topSeeded
+    ? [`top seeded: ${releaseShortTitle(topSeeded)}`, `${topSeeded.seeders || 0} seeders`, releaseQualityName(topSeeded), topReasons].filter(Boolean)
+    : [];
+
+  return `${releases.length} found, all rejected — ${parts.join(', ')}${topBits.length ? `. ${topBits.join(' — ')}` : ''}`;
+}
+
 async function fetchRejectionSummary(releaseUrl) {
   try {
     const releases = await fetchWithTimeout(releaseUrl, 30000);
-    if (!Array.isArray(releases) || releases.length === 0) return null;
-    const rejected = releases.filter(r => r.rejected);
-    const approved = releases.filter(r => !r.rejected);
-    if (approved.length > 0) {
-      return `${approved.length} release${approved.length !== 1 ? 's' : ''} found — may be grabbing now, check downloads`;
-    }
-    const counts = {};
-    for (const r of rejected) {
-      for (const rej of (r.rejections || [])) {
-        const cat = rej.includes('alias') ? 'title alias conflict'
-          : rej.includes('seeders') ? 'no seeders'
-          : rej.includes('not wanted in profile') ? 'quality profile mismatch'
-          : rej.includes('Unknown') ? 'unrecognized release'
-          : rej.includes('Wrong season') ? 'wrong season'
-          : rej.includes('Existing file') ? 'already at cutoff quality'
-          : rej.includes('Episode wasn') ? 'episode not monitored'
-          : 'other';
-        counts[cat] = (counts[cat] || 0) + 1;
-      }
-    }
-    const parts = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `${v} ${k}`);
-    return `${rejected.length} found, all rejected — ${parts.join(', ')}`;
+    return summarizeReleaseRejections(releases);
   } catch {
     return null;
   }
@@ -64,7 +101,64 @@ function addPipelineStep(key, message) {
   const item = getPipelineItem(key);
   if (!item) return;
   if (!item.steps) item.steps = [];
-  item.steps.push({ ts: Date.now(), message });
+  const now = Date.now();
+  item.statusDetail = message;
+  item.statusUpdatedAt = now;
+  const latest = item.steps[item.steps.length - 1];
+  if (latest?.message === message) {
+    latest.ts = now;
+    return;
+  }
+  item.steps.push({ ts: now, message });
+  if (item.steps.length > 80) item.steps.shift();
+}
+
+function markPipelineNoResults(key, message, logId, retryable = true) {
+  const entry = pendingSearches.get(key);
+  if (entry) Object.assign(entry, { status: 'no_results', error: message });
+  addPipelineStep(key, message);
+  setPipelineStuck(key, message);
+  const item = getPipelineItem(key);
+  if (item) {
+    item.canRetry = retryable;
+    item.stuckAt = Date.now();
+  }
+  if (logId) addLogStep(logId, message, 'warning');
+}
+
+function getArrCommandState(cmd) {
+  const raw = String(cmd?.state || cmd?.status || '').toLowerCase();
+  if (raw === 'completed' || raw === 'complete') return 'completed';
+  if (raw === 'failed' || raw === 'failure' || raw === 'error') return 'failed';
+  return raw || 'running';
+}
+
+function describeArrCommand(serviceName, cmd) {
+  const commandName = cmd?.name || cmd?.commandName || `${serviceName} command`;
+  const state = getArrCommandState(cmd);
+  const message = cmd?.message || cmd?.statusMessage || cmd?.body?.completionMessage || state;
+  return `${serviceName} ${commandName}: ${message}`;
+}
+
+function maybeAddCommandProgress(key, serviceName, cmd, tracker) {
+  const now = Date.now();
+  const detail = describeArrCommand(serviceName, cmd);
+  if (detail !== tracker.lastDetail || now - tracker.lastAt >= ARR_COMMAND_STATUS_STEP_INTERVAL_MS) {
+    addPipelineStep(key, detail);
+    tracker.lastDetail = detail;
+    tracker.lastAt = now;
+  }
+}
+
+function selectApprovedRelease(releases) {
+  if (!Array.isArray(releases)) return null;
+  return releases
+    .filter(release => !release.rejected && (release.seeders == null || release.seeders > 0))
+    .sort((a, b) => (b.seeders || 0) - (a.seeders || 0) || (b.size || 0) - (a.size || 0))[0] || null;
+}
+
+function safeErrorMessage(error) {
+  return summarizeError(error).message.replace(/apikey=[^&\s]+/gi, 'apikey=[redacted]');
 }
 
 function readPipelineContext(key, overrides = {}) {
@@ -241,13 +335,16 @@ export async function watchSonarrSearch(pendingKey, commandId, seriesId, seasonN
 
   let commandCompleted = false;
   let firstPoll = true;
+  const progressTracker = { lastDetail: '', lastAt: 0 };
   while (Date.now() < deadline) {
-    if (!firstPoll) await new Promise(r => setTimeout(r, 15000));
+    if (!firstPoll) await new Promise(r => setTimeout(r, ARR_COMMAND_POLL_INTERVAL_MS));
     firstPoll = false;
     try {
       const cmd = await fetchWithTimeout(`${SONARR_HOST}/api/v3/command/${commandId}?apikey=${SONARR_API_KEY}`, 8000);
-      if (cmd.state === 'failed') {
-        const msg = cmd.exception || 'Search command failed';
+      maybeAddCommandProgress(pendingKey, 'Sonarr', cmd, progressTracker);
+      const cmdState = getArrCommandState(cmd);
+      if (cmdState === 'failed') {
+        const msg = cmd.exception || cmd.message || 'Search command failed';
         addLogStep(logId, `Sonarr search failed: ${msg}`, 'error');
         const entry = pendingSearches.get(pendingKey);
         if (entry) Object.assign(entry, { status: 'error', error: msg });
@@ -257,19 +354,14 @@ export async function watchSonarrSearch(pendingKey, commandId, seriesId, seasonN
         setTimeout(() => pendingSearches.delete(pendingKey), 30000);
         return;
       }
-      if (cmd.state === 'completed') { commandCompleted = true; break; }
+      if (cmdState === 'completed') { commandCompleted = true; break; }
     } catch { /* continue polling */ }
   }
 
   if (!commandCompleted) {
     const timeoutMsg = 'Sonarr search command timed out — indexers may be slow or unavailable';
     addLogStep(logId, timeoutMsg, 'warning');
-    addPipelineStep(pendingKey, timeoutMsg);
-    const entry = pendingSearches.get(pendingKey);
-    if (entry) Object.assign(entry, { status: 'no_results' });
-    setPipelineStuck(pendingKey, timeoutMsg);
-    const item = getPipelineItem(pendingKey);
-    if (item) item.canRetry = true;
+    markPipelineNoResults(pendingKey, timeoutMsg, null);
     setTimeout(() => pendingSearches.delete(pendingKey), 120000);
     return;
   }
@@ -326,12 +418,7 @@ export async function watchSonarrSearch(pendingKey, commandId, seriesId, seasonN
         : `${SONARR_HOST}/api/v3/release?seriesId=${seriesId}&apikey=${SONARR_API_KEY}`;
       const rejSummary = await fetchRejectionSummary(releaseUrl);
       const noResultsMsg = rejSummary ? `No grab — ${rejSummary}` : 'No matching releases found — check indexers or episode availability';
-      addLogStep(logId, noResultsMsg, rejSummary ? 'warning' : 'warning');
-      addPipelineStep(pendingKey, noResultsMsg);
-      if (entry) Object.assign(entry, { status: 'no_results' });
-      setPipelineStuck(pendingKey, rejSummary || STUCK_REASONS.searching_no_results);
-      const item = getPipelineItem(pendingKey);
-      if (item) item.canRetry = true;
+      markPipelineNoResults(pendingKey, noResultsMsg, logId);
       setTimeout(() => pendingSearches.delete(pendingKey), 120000);
     }
   } catch (err) {
@@ -361,13 +448,16 @@ export async function watchRadarrSearch(pipelineKey, commandId, movieId, logId, 
 
   let commandCompleted = false;
   let firstPoll = true;
+  const progressTracker = { lastDetail: '', lastAt: 0 };
   while (Date.now() < deadline) {
-    if (!firstPoll) await new Promise(r => setTimeout(r, 15000));
+    if (!firstPoll) await new Promise(r => setTimeout(r, ARR_COMMAND_POLL_INTERVAL_MS));
     firstPoll = false;
     try {
       const cmd = await fetchWithTimeout(`${RADARR_HOST}/api/v3/command/${commandId}?apikey=${RADARR_API_KEY}`, 8000);
-      if (cmd.state === 'failed') {
-        const msg = cmd.exception || 'Radarr search command failed';
+      maybeAddCommandProgress(pipelineKey, 'Radarr', cmd, progressTracker);
+      const cmdState = getArrCommandState(cmd);
+      if (cmdState === 'failed') {
+        const msg = cmd.exception || cmd.message || 'Radarr search command failed';
         const entry = pendingSearches.get(pipelineKey);
         if (entry) Object.assign(entry, { status: 'error', error: msg });
         setPipelineStuck(pipelineKey, msg);
@@ -377,19 +467,14 @@ export async function watchRadarrSearch(pipelineKey, commandId, movieId, logId, 
         setTimeout(() => pendingSearches.delete(pipelineKey), 30000);
         return;
       }
-      if (cmd.state === 'completed') { commandCompleted = true; break; }
+      if (cmdState === 'completed') { commandCompleted = true; break; }
     } catch { /* continue polling */ }
   }
 
   if (!commandCompleted) {
     const timeoutMsg = 'Radarr search command timed out — indexers may be slow or unavailable';
     if (logId) addLogStep(logId, timeoutMsg, 'warning');
-    addPipelineStep(pipelineKey, timeoutMsg);
-    const entry = pendingSearches.get(pipelineKey);
-    if (entry) Object.assign(entry, { status: 'no_results' });
-    setPipelineStuck(pipelineKey, timeoutMsg);
-    const item = getPipelineItem(pipelineKey);
-    if (item) item.canRetry = true;
+    markPipelineNoResults(pipelineKey, timeoutMsg, null);
     setTimeout(() => pendingSearches.delete(pipelineKey), 120000);
     return;
   }
@@ -442,12 +527,7 @@ export async function watchRadarrSearch(pipelineKey, commandId, movieId, logId, 
       const releaseUrl = `${RADARR_HOST}/api/v3/release?movieId=${movieId}&apikey=${RADARR_API_KEY}`;
       const rejSummary = await fetchRejectionSummary(releaseUrl);
       const noResultsMsg = rejSummary ? `No grab — ${rejSummary}` : 'No matching releases found — check indexers or availability';
-      addPipelineStep(pipelineKey, noResultsMsg);
-      if (entry) Object.assign(entry, { status: 'no_results' });
-      setPipelineStuck(pipelineKey, rejSummary || STUCK_REASONS.searching_no_results);
-      const item = getPipelineItem(pipelineKey);
-      if (item) item.canRetry = true;
-      if (logId) addLogStep(logId, noResultsMsg, 'warning');
+      markPipelineNoResults(pipelineKey, noResultsMsg, logId);
       setTimeout(() => pendingSearches.delete(pipelineKey), 120000);
     }
   } catch (err) {
@@ -534,6 +614,20 @@ function checkPipelineStuck() {
 registerInterval(setInterval(checkPipelineStuck, TIMING.CHECK_STUCK_INTERVAL_MS || 30000));
 
 const queueAlerts = new Map();
+
+export function restoreQueueAlertsFromActivityLog() {
+  queueAlerts.clear();
+  for (const entry of getActivityLog()) {
+    if (entry?.type !== 'queue' || entry?.status !== 'error') continue;
+    const service = entry.details?.service || entry.context?.service;
+    const discriminator = entry.details?.downloadId || entry.details?.queueId || null;
+    if (!service || !discriminator) continue;
+    const key = `${service}-q-${discriminator}`;
+    if (!queueAlerts.has(key)) {
+      queueAlerts.set(key, { logId: entry.id, status: 'error' });
+    }
+  }
+}
 
 export async function monitorQueues() {
   const tasks = [];
@@ -674,7 +768,11 @@ export async function monitorQueues() {
             // Queue disappearance is the earliest reliable handoff from downloading to import.
             advancePipeline(pItem.key, 'importing');
             if (pItem.logId) addLogStep(pItem.logId, 'Download complete — importing to library', 'success');
-            setTimeout(() => completePipeline(pItem.key), 3 * 60 * 1000);
+            scheduleLibraryRefresh(pItem.service + ' queue cleared for ' + (pItem.title || pItem.key), LIBRARY_REFRESH_DELAY_MS);
+            setTimeout(() => {
+              completePipeline(pItem.key);
+              scheduleLibraryRefresh(pItem.service + ' pipeline completed for ' + (pItem.title || pItem.key), 0);
+            }, 3 * 60 * 1000);
           }
         }
       } catch (err) {
@@ -740,7 +838,11 @@ export async function monitorQueues() {
           if (!stillInQueue) {
             advancePipeline(pItem.key, 'importing');
             if (pItem.logId) addLogStep(pItem.logId, 'Download complete — importing to library', 'success');
-            setTimeout(() => completePipeline(pItem.key), 3 * 60 * 1000);
+            scheduleLibraryRefresh(pItem.service + ' queue cleared for ' + (pItem.title || pItem.key), LIBRARY_REFRESH_DELAY_MS);
+            setTimeout(() => {
+              completePipeline(pItem.key);
+              scheduleLibraryRefresh(pItem.service + ' pipeline completed for ' + (pItem.title || pItem.key), 0);
+            }, 3 * 60 * 1000);
           }
         }
       } catch (err) {
@@ -778,6 +880,8 @@ router.get('/pipeline', (req, res) => {
     eta: item.eta,
     logId: item.logId,
     steps: item.steps || [],
+    statusDetail: item.statusDetail || null,
+    statusUpdatedAt: item.statusUpdatedAt || null,
     seriesId: item.seriesId || null,
     movieId: item.movieId || null,
     artistId: item.artistId || null,
@@ -832,6 +936,62 @@ router.post('/pipeline/:key/retry', async (req, res) => {
           retryId: item.retryId,
         }));
     } else if (item.service === 'radarr' && item.retryId && RADARR_API_KEY) {
+      advancePipeline(item.key, 'searching');
+      pendingSearches.set(item.key, { key: item.key, title: item.title, service: 'radarr', type: 'movie', startedAt: Date.now(), status: 'searching', posterUrl: item.posterUrl || null });
+      addPipelineStep(item.key, 'Retry checking Radarr release results directly…');
+      if (item.logId) addLogStep(item.logId, 'Retrying direct release check…', 'info');
+
+      try {
+        const releases = await fetchWithTimeout(`${RADARR_HOST}/api/v3/release?movieId=${item.retryId}&apikey=${RADARR_API_KEY}`, DIRECT_RELEASE_TIMEOUT_MS);
+        const releaseList = Array.isArray(releases) ? releases : [];
+        const approvedRelease = selectApprovedRelease(releaseList);
+        const approvedCount = releaseList.filter(r => !r.rejected).length;
+        addPipelineStep(item.key, `Radarr direct retry returned ${releaseList.length} release(s): ${approvedCount} auto-approved`);
+
+        if (approvedRelease) {
+          addPipelineStep(item.key, `Auto-grabbing ${releaseQualityName(approvedRelease)} with ${approvedRelease.seeders || 0} seeders: ${releaseShortTitle(approvedRelease)}`);
+          await arrGrab({
+            service: 'Radarr',
+            host: RADARR_HOST,
+            apiKey: RADARR_API_KEY,
+            guid: approvedRelease.guid,
+            indexerId: approvedRelease.indexerId,
+            title: approvedRelease.title,
+          });
+          const entry = pendingSearches.get(item.key);
+          if (entry) Object.assign(entry, { status: 'grabbed' });
+          advancePipeline(item.key, 'grabbed');
+          addPipelineStep(item.key, 'Direct retry grab accepted by Radarr — waiting for qBittorrent handoff');
+          if (item.logId) addLogStep(item.logId, `Direct retry grab accepted: ${releaseShortTitle(approvedRelease)}`, 'success');
+          setTimeout(() => monitorQueues().catch((error) => {
+            logServerEvent('warn', 'pipeline.queue_monitor.after_direct_retry_failed', {
+              ...readPipelineContext(item.key),
+              error: summarizeError(error),
+            });
+          }), 1500);
+          setTimeout(() => pendingSearches.delete(item.key), 90000);
+          return res.json({ success: true, accelerated: true, grabbed: true });
+        }
+
+        if (releaseList.length > 0) {
+          const rejSummary = summarizeReleaseRejections(releaseList);
+          const noResultsMsg = rejSummary
+            ? `No grab — ${rejSummary}`
+            : 'No matching releases found — check indexers or availability';
+          markPipelineNoResults(item.key, noResultsMsg, item.logId);
+          setTimeout(() => pendingSearches.delete(item.key), 120000);
+          return res.json({ success: true, accelerated: true, grabbed: false, noResults: true });
+        }
+
+        addPipelineStep(item.key, 'Radarr direct retry returned no releases — starting full Radarr command search…');
+      } catch (directErr) {
+        addPipelineStep(item.key, `Direct retry did not finish: ${safeErrorMessage(directErr)}. Starting full Radarr command search…`);
+        logServerEvent('warn', 'pipeline.radarr_direct_retry.failed', {
+          ...readPipelineContext(item.key),
+          error: summarizeError(directErr),
+        });
+      }
+
       const cmdResp = await fetch(`${RADARR_HOST}/api/v3/command?apikey=${RADARR_API_KEY}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: 'MoviesSearch', movieIds: [item.retryId] }),
@@ -840,9 +1000,8 @@ router.post('/pipeline/:key/retry', async (req, res) => {
         throw new Error(await readUpstreamErrorMessage(cmdResp, `Radarr command failed: HTTP ${cmdResp.status}`));
       }
       const cmdData = await cmdResp.json();
-      advancePipeline(item.key, 'searching');
       addPipelineStep(item.key, 'Retry submitted — waiting for Radarr search completion');
-      if (item.logId) addLogStep(item.logId, 'Retrying search…', 'info');
+      if (item.logId) addLogStep(item.logId, 'Retrying full Radarr search…', 'info');
       watchRadarrSearch(item.key, cmdData.id, item.retryId, item.logId, item.title)
         .catch((error) => handleWatcherCrash(item.key, 'radarr-search-retry', error, {
           service: 'radarr',
@@ -1034,6 +1193,65 @@ router.post('/command/search', async (req, res) => {
       activeTitle = movieTitle;
       const logId = logActivity('download', `Searching for "${movieTitle}"`, { movieId: id }, 'pending', { service: 'radarr', title: movieTitle, movieId: id });
       activeLogId = logId;
+      const pipelineKey = `radarr-${id}-${Date.now()}`;
+      activePipelineKey = pipelineKey;
+      addPipelineItem(pipelineKey, { service: 'radarr', title: movieTitle, subtitle: 'Movie', posterUrl: moviePosterUrl, logId, movieId: id, retryId: id });
+      advancePipeline(pipelineKey, 'searching');
+      pendingSearches.set(pipelineKey, { key: pipelineKey, title: movieTitle, service: 'radarr', type: 'movie', startedAt: Date.now(), status: 'searching', posterUrl: moviePosterUrl });
+      updateLogEntry(logId, { status: 'info', message: `Radarr checking direct release results for "${movieTitle}"` });
+      addPipelineStep(pipelineKey, 'Checking Radarr release results directly before starting the slower command search…');
+
+      try {
+        const releases = await fetchWithTimeout(`${RADARR_HOST}/api/v3/release?movieId=${id}&apikey=${RADARR_API_KEY}`, DIRECT_RELEASE_TIMEOUT_MS);
+        const releaseList = Array.isArray(releases) ? releases : [];
+        const approvedRelease = selectApprovedRelease(releaseList);
+        const approvedCount = releaseList.filter(r => !r.rejected).length;
+        addPipelineStep(pipelineKey, `Radarr direct search returned ${releaseList.length} release(s): ${approvedCount} auto-approved`);
+
+        if (approvedRelease) {
+          addPipelineStep(pipelineKey, `Auto-grabbing ${releaseQualityName(approvedRelease)} with ${approvedRelease.seeders || 0} seeders: ${releaseShortTitle(approvedRelease)}`);
+          await arrGrab({
+            service: 'Radarr',
+            host: RADARR_HOST,
+            apiKey: RADARR_API_KEY,
+            guid: approvedRelease.guid,
+            indexerId: approvedRelease.indexerId,
+            title: approvedRelease.title,
+          });
+          const entry = pendingSearches.get(pipelineKey);
+          if (entry) Object.assign(entry, { status: 'grabbed' });
+          advancePipeline(pipelineKey, 'grabbed');
+          addPipelineStep(pipelineKey, 'Direct grab accepted by Radarr — waiting for qBittorrent handoff');
+          addLogStep(logId, `Direct grab accepted: ${releaseShortTitle(approvedRelease)}`, 'success');
+          setTimeout(() => monitorQueues().catch((error) => {
+            logServerEvent('warn', 'pipeline.queue_monitor.after_direct_grab_failed', {
+              ...readPipelineContext(pipelineKey),
+              error: summarizeError(error),
+            });
+          }), 1500);
+          setTimeout(() => pendingSearches.delete(pipelineKey), 90000);
+          return res.json({ success: true, accelerated: true, grabbed: true, pipelineKey });
+        }
+
+        if (releaseList.length > 0) {
+          const rejSummary = summarizeReleaseRejections(releaseList);
+          const noResultsMsg = rejSummary
+            ? `No grab — ${rejSummary}`
+            : 'No matching releases found — check indexers or availability';
+          markPipelineNoResults(pipelineKey, noResultsMsg, logId);
+          setTimeout(() => pendingSearches.delete(pipelineKey), 120000);
+          return res.json({ success: true, accelerated: true, grabbed: false, noResults: true, pipelineKey });
+        }
+
+        addPipelineStep(pipelineKey, 'Radarr direct search returned no releases — starting full Radarr command search…');
+      } catch (directErr) {
+        addPipelineStep(pipelineKey, `Direct release check did not finish: ${safeErrorMessage(directErr)}. Starting full Radarr command search…`);
+        logServerEvent('warn', 'pipeline.radarr_direct_search.failed', {
+          ...readPipelineContext(pipelineKey),
+          error: summarizeError(directErr),
+        });
+      }
+
       const resp = await fetch(`${RADARR_HOST}/api/v3/command?apikey=${RADARR_API_KEY}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: 'MoviesSearch', movieIds: [id] }),
@@ -1041,17 +1259,12 @@ router.post('/command/search', async (req, res) => {
       if (!resp.ok) throw new Error(await readUpstreamErrorMessage(resp, `Radarr command failed: HTTP ${resp.status}`));
       const cmdData = await resp.json();
       updateLogEntry(logId, { status: 'info', message: `Radarr searching for "${movieTitle}"` });
-      const pipelineKey = `radarr-${id}-${Date.now()}`;
-      activePipelineKey = pipelineKey;
-      addPipelineItem(pipelineKey, { service: 'radarr', title: movieTitle, subtitle: 'Movie', posterUrl: moviePosterUrl, logId, movieId: id, retryId: id });
-      advancePipeline(pipelineKey, 'searching');
-      pendingSearches.set(pipelineKey, { key: pipelineKey, title: movieTitle, service: 'radarr', type: 'movie', startedAt: Date.now(), status: 'searching' });
       watchRadarrSearch(pipelineKey, cmdData.id, id, logId, movieTitle).catch((error) => handleWatcherCrash(pipelineKey, 'radarr-search', error, {
         service: 'radarr',
         title: movieTitle,
         movieId: id,
       }));
-      res.json({ success: true });
+      res.json({ success: true, accelerated: false, pipelineKey });
 
     } else if (service === 'lidarr' && LIDARR_API_KEY) {
       if (albumIds?.length) {
@@ -1125,6 +1338,7 @@ router.post('/grab', async (req, res) => {
   if (!cfg) return res.status(400).json({ error: 'Unknown service' });
   try {
     await arrGrab({ ...cfg, guid, indexerId, downloadUrl, title });
+    scheduleLibraryRefresh('arr grab accepted for ' + service, LIBRARY_REFRESH_DELAY_MS);
     let pipelineTracked = null;
     if (pipelineKey) {
       const item = getPipelineItem(pipelineKey);

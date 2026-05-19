@@ -1,8 +1,12 @@
 import { Router } from 'express';
-import { qbAction, qbFetchJson } from '../utils.js';
+import { fetchWithTimeout, normalizeForMatch, pickImageUrl, qbAction, qbFetchJson } from '../utils.js';
+import { CONFIG } from '../config.js';
 import {
   getBwLifetimeState,
+  getPipeline,
+  libraryCache,
   logServerEvent,
+  metadataCache,
   noteQbSessionTotals,
   saveBwLifetime as persistBwLifetime,
   resetBwLifetime,
@@ -13,6 +17,9 @@ const router = Router();
 
 let bwSaveCounter = 0;
 let bwSavePending = false;
+const TORRENT_POSTER_LOOKUP_TTL_MS = 6 * 60 * 60 * 1000;
+const TORRENT_POSTER_LOOKUP_TIMEOUT_MS = 3500;
+const torrentPosterLookupCache = new Map();
 const pollFailures = {
   bandwidth: false,
   status: false,
@@ -20,6 +27,145 @@ const pollFailures = {
 
 function summarizeHash(hash) {
   return typeof hash === 'string' && hash.length > 8 ? `${hash.slice(0, 8)}…` : hash || null;
+}
+
+function inferServiceFromCategory(category) {
+  const value = String(category || '').toLowerCase();
+  if (value.includes('radarr') || value.includes('movie')) return 'radarr';
+  if (value.includes('sonarr') || value.includes('tv')) return 'sonarr';
+  if (value.includes('lidarr') || value.includes('music')) return 'lidarr';
+  return null;
+}
+
+function titleMatchesTorrent(title, torrentName) {
+  const titleText = normalizeForMatch(title);
+  const torrentText = normalizeForMatch(torrentName);
+  if (titleText.length < 3) return false;
+  if (torrentText.includes(titleText)) return true;
+  const tokens = titleText
+    .split(' ')
+    .filter((token) => token.length >= 3 && !['and', 'the', 'for', 'with'].includes(token));
+  return tokens.length >= 2 && tokens.every((token) => torrentText.includes(token));
+}
+
+function pickPosterFromItems(torrent, items, titleKeys = ['title']) {
+  for (const item of items || []) {
+    if (!item?.posterUrl) continue;
+    if (titleKeys.some((key) => titleMatchesTorrent(item?.[key], torrent.name))) {
+      return item.posterUrl;
+    }
+  }
+  return null;
+}
+
+function compactSpaces(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function cleanReleaseTitle(name) {
+  return compactSpaces(String(name || '')
+    .split('/')
+    .pop()
+    .replace(/\.[a-z0-9]{2,4}$/i, '')
+    .replace(/\[[^\]]+\]/g, ' ')
+    .replace(/[._-]+/g, ' ')
+    .replace(/\b(480p|576p|720p|1080p|2160p|4k|uhd|hdr|dv|web|webrip|webdl|web dl|bluray|blu ray|brrip|bdrip|remux|hdtv|amzn|nf|hulu|aac|ddp|dts|x264|x265|h264|h265|hevc|avc|proper|repack|internal|multi|yts|mx|bitsearch|to|leak|mp4|mkv)\b/gi, ' '));
+}
+
+function getPosterLookupTerms(name) {
+  const cleaned = cleanReleaseTitle(name);
+  const terms = [
+    cleaned.match(/^(.+?)\s+s\d{1,2}(?:e\d{1,2})?\b/i)?.[1],
+    cleaned.match(/^(.+?)\s+(?:19|20)\d{2}\b/)?.[1],
+    cleaned,
+  ]
+    .map(compactSpaces)
+    .filter((term) => term.length >= 3);
+  return [...new Set(terms)];
+}
+
+async function lookupArrPoster(service, term) {
+  if (service === 'movie' && CONFIG.RADARR_API_KEY) {
+    const results = await fetchWithTimeout(
+      `${CONFIG.RADARR_HOST}/api/v3/movie/lookup?term=${encodeURIComponent(term)}&apikey=${CONFIG.RADARR_API_KEY}`,
+      TORRENT_POSTER_LOOKUP_TIMEOUT_MS,
+    );
+    return Array.isArray(results) ? pickImageUrl(results[0]?.images, 'poster') : null;
+  }
+  if (service === 'series' && CONFIG.SONARR_API_KEY) {
+    const results = await fetchWithTimeout(
+      `${CONFIG.SONARR_HOST}/api/v3/series/lookup?term=${encodeURIComponent(term)}&apikey=${CONFIG.SONARR_API_KEY}`,
+      TORRENT_POSTER_LOOKUP_TIMEOUT_MS,
+    );
+    return Array.isArray(results) ? pickImageUrl(results[0]?.images, 'poster') : null;
+  }
+  return null;
+}
+
+async function lookupPosterForTorrent(torrent, service) {
+  const terms = getPosterLookupTerms(torrent.name);
+  if (terms.length === 0) return null;
+  const cacheKey = `${service || 'any'}:${normalizeForMatch(terms[0])}`;
+  const cached = torrentPosterLookupCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < TORRENT_POSTER_LOOKUP_TTL_MS) {
+    return cached.posterUrl;
+  }
+  if (cached?.inflight) return cached.inflight;
+
+  const serviceOrder = service === 'radarr'
+    ? ['movie', 'series']
+    : service === 'sonarr'
+      ? ['series', 'movie']
+      : ['series', 'movie'];
+
+  const inflight = (async () => {
+    for (const kind of serviceOrder) {
+      for (const term of terms) {
+        try {
+          const posterUrl = await lookupArrPoster(kind, term);
+          if (posterUrl) {
+            torrentPosterLookupCache.set(cacheKey, { ts: Date.now(), posterUrl });
+            return posterUrl;
+          }
+        } catch {
+          /* keep trying cheaper alternate terms/services */
+        }
+      }
+    }
+    torrentPosterLookupCache.set(cacheKey, { ts: Date.now(), posterUrl: null });
+    return null;
+  })();
+
+  torrentPosterLookupCache.set(cacheKey, { ts: Date.now(), posterUrl: null, inflight });
+  return inflight;
+}
+
+async function pickTorrentPosterUrl(torrent) {
+  const hash = String(torrent.hash || '').toLowerCase();
+  const cached = metadataCache.data?.[hash]?.posterUrl;
+  if (cached) return cached;
+
+  const service = inferServiceFromCategory(torrent.category);
+  const pipelinePoster = pickPosterFromItems(
+    torrent,
+    getPipeline().filter((item) => !service || item.service === service),
+  );
+  if (pipelinePoster) return pipelinePoster;
+
+  if (service === 'radarr') {
+    return pickPosterFromItems(torrent, libraryCache.movies, ['title', 'sortTitle']) || lookupPosterForTorrent(torrent, service);
+  }
+  if (service === 'sonarr') {
+    return pickPosterFromItems(torrent, libraryCache.series, ['title', 'sortTitle']) || lookupPosterForTorrent(torrent, service);
+  }
+  if (service === 'lidarr') {
+    return pickPosterFromItems(torrent, libraryCache.artists, ['artistName', 'sortName']);
+  }
+  return pickPosterFromItems(torrent, [
+    ...libraryCache.movies,
+    ...libraryCache.series,
+    ...libraryCache.artists,
+  ], ['title', 'sortTitle', 'artistName', 'sortName']) || lookupPosterForTorrent(torrent, service);
 }
 
 function markPollFailure(key, event, error, fields = {}) {
@@ -102,7 +248,7 @@ router.get('/qbittorrent/status', async (req, res) => {
     const torrents = await qbFetchJson('/api/v2/torrents/info');
     markPollRecovery('status', 'qb.torrents.status_recovered');
 
-    const formattedTorrents = torrents.map(torrent => ({
+    const formattedTorrents = await Promise.all(torrents.map(async torrent => ({
       name: torrent.name,
       hash: torrent.hash,
       size: torrent.size,
@@ -113,11 +259,12 @@ router.get('/qbittorrent/status', async (req, res) => {
       state: torrent.state,
       ratio: torrent.ratio,
       category: torrent.category,
+      posterUrl: await pickTorrentPosterUrl(torrent),
       addedOn: new Date(torrent.added_on * 1000).toISOString(),
       completedOn: torrent.completion_on > 0
         ? new Date(torrent.completion_on * 1000).toISOString()
         : null
-    }));
+    })));
 
     res.json({
       torrents: formattedTorrents,

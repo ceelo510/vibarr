@@ -1,11 +1,78 @@
-## 2026-05-13 — Fix download-path write permissions for active TV grabs
+## 2026-05-19 — Harden poster loading across dashboard surfaces
 
-**User prompt:** Requested investigation into a case where active TV grabs were not downloading or appearing in the library.
+**User prompt:** `do not stop until fixed permanently, we can no longer have missing image posters ANYWHERE in the UI .`
 
 **What was broken / what changed:**
-- Verified on May 13, 2026 that search and grab were succeeding, but the grabbed releases remained stuck in queue with no imported files on disk.
-- Traced the live failure to download-client file-open errors, not search logic: the host download path `/docker/downloads/unsorted` had mode `755`, while the torrent daemon runs as a service user that needs write access there. That left the daemon unable to create payload files under `unsorted`.
-- Fixed the live host by changing `/docker/downloads/unsorted` to `2775`, then rechecking/restarting the queued torrents so the download client could begin writing again.
+- The live backend still emitted fragile poster URLs: protocol-relative URLs were ignored, absolute `img.url` values could be proxied as bad Arr paths, and Arr image paths without a leading slash produced malformed `/api/arr-image/<service>MediaCover/...` URLs.
+- The large qBittorrent download cards depended only on later `/api/media-info/batch` hydration, even when the active pipeline or library cache already had a valid poster for the same torrent title.
+- Several frontend poster surfaces manually rendered `<img>` tags and hid them on failure, leaving inconsistent blank or missing-art states.
+- Added shared backend poster URL normalization, added qBittorrent poster hints from metadata cache, active pipeline state, library cache, and cached Arr lookup fallback for release names that do not match library titles contiguously, and routed all primary dashboard poster/thumb surfaces through one shared frontend `PosterImage` component with stable fallback rendering.
+
+**Files changed:**
+- `backend/src/utils.js`: normalizes `http(s)`, protocol-relative, absolute, and relative Arr image URL forms in `pickImageUrl()` and `pickArrImageUrl()`.
+- `backend/src/routes/qbittorrent.js`: enriches `/api/qbittorrent/status` torrent rows with `posterUrl` from metadata cache, pipeline items, library cache, or cached Radarr/Sonarr lookup fallback.
+- `backend/package.json`, `backend/test/utils.test.js`: adds backend regression tests for poster URL normalization.
+- `frontend/src/PosterImage.jsx`, `frontend/src/App.jsx`, `frontend/src/Library.jsx`, `frontend/src/PipelineCard.jsx`, `frontend/src/SidePanel.jsx`, `frontend/src/TorrentTable.jsx`: replaces ad hoc poster rendering with a shared component and lets download cards use torrent-level poster hints before media-info hydration catches up.
+- `frontend/src/test/posterImage.test.jsx`: adds frontend poster source normalization tests.
+
+**Before excerpt:**
+```js
+if (img.remoteUrl && img.remoteUrl.startsWith('http')) return img.remoteUrl;
+if (img.url) return '/api/arr-image/' + service + img.url;
+```
+
+**After excerpt:**
+```js
+if (img.remoteUrl && /^https?:\/\/|^\/\//i.test(img.remoteUrl)) {
+  return img.remoteUrl.startsWith('//') ? `https:${img.remoteUrl}` : img.remoteUrl;
+}
+return '/api/arr-image/' + service + (img.url.startsWith('/') ? '' : '/') + img.url;
+```
+
+## 2026-05-15 — Fast Radarr release preflight and clearer search status
+
+**User prompt:** `[Image #1] these are taking too long, without any updates. i need it to speed up as much as it can, and provide better status updates on what stage it is. i am SURE there is manual torrents of this file so it makes no sense that the auto cant find it asap.`
+
+**What was broken / what changed:**
+- Verified live on May 15, 2026 that `Forrest Gump` stayed on a generic `Searching` card for minutes even though Radarr's direct release lookup returned in about 800 ms.
+- The actual result was not "no torrents": Radarr found 3 releases, but all were rejected; the only seeded release was rejected because `Bluray-2160p is not wanted in profile`.
+- Moved Radarr pipeline item creation before slow upstream work, added a direct Radarr release preflight before `MoviesSearch`, auto-grabbed immediately when an approved seeded release exists, and immediately marked profile/indexer rejection results with the exact reason instead of waiting for a multi-minute timeout.
+- Fixed Arr command watchers to recognize both `status` and `state` fields, because Radarr reports completed commands via `status: "completed"`; the old watcher treated that as still searching.
+- Stopped loading the legacy `backend/src/pipeline.js` side effects from `server.js`; queue-alert restore now comes from the active route module so duplicate stale stuck checks do not compete with the current pipeline code.
+- Added a frontend fallback status line so active search cards still show `statusDetail` even before a step timeline exists.
+
+**Files changed:**
+- `backend/server.js`: imports `restoreQueueAlertsFromActivityLog` from the active routes pipeline module.
+- `backend/src/routes/pipeline.js`: adds direct Radarr release preflight, command status normalization, 5-second Arr command polling, detailed rejection summaries, queue-alert restore, and `statusDetail` fields in `/api/pipeline`.
+- `frontend/src/PipelineCard.jsx`: renders `statusDetail` as the collapsed activity line and compares it for memoized updates.
+- `CHANGELOG.md`: prepended this entry.
+
+**Before excerpt:**
+```js
+const resp = await fetch(`${RADARR_HOST}/api/v3/command?apikey=${RADARR_API_KEY}`, {
+  method: 'POST', headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ name: 'MoviesSearch', movieIds: [id] }),
+});
+if (cmd.state === 'completed') { commandCompleted = true; break; }
+```
+
+**After excerpt:**
+```js
+addPipelineStep(pipelineKey, 'Checking Radarr release results directly before starting the slower command search…');
+const releases = await fetchWithTimeout(`${RADARR_HOST}/api/v3/release?movieId=${id}&apikey=${RADARR_API_KEY}`, DIRECT_RELEASE_TIMEOUT_MS);
+const approvedRelease = selectApprovedRelease(releaseList);
+const cmdState = getArrCommandState(cmd);
+if (cmdState === 'completed') { commandCompleted = true; break; }
+```
+
+## 2026-05-13 — Fix qBittorrent write permissions for `unsorted` TV grabs
+
+**User prompt:** `clearly not working on it right now. check it out for yourself with the logs from today pertaining the boys as is showing that it did not download or does not have it on the system currently.`
+
+**What was broken / what changed:**
+- Verified on May 13, 2026 that Sonarr search and grab were working for `The Boys` season 5, but every grabbed release remained stuck in Sonarr queue with no imported files on disk.
+- Traced the live failure to qBittorrent file-open errors, not search logic: the host download path `/docker/downloads/unsorted` had mode `755`, while qBittorrent runs as `abc` (`uid 1000`, `gid 1001`). That left the daemon without write permission to create episode payloads under `unsorted`.
+- Fixed the live host by changing `/docker/downloads/unsorted` to `2775`, then rechecking/restarting the queued `The Boys` torrents so qBittorrent could begin writing again.
 - Hardened `install.sh` so fresh installs create `/docker/downloads` and `/docker/downloads/unsorted` with the expected `1000:1001` ownership and `2775` permissions instead of inheriting an incompatible host default.
 
 **Files changed:**
@@ -66,12 +133,12 @@ const hashes = [...new Set((torrentList || []).map(t => t.hash).filter(Boolean))
 const ContainerChip = React.memo(function ContainerChip({ container, name, href }) {
 ```
 
-## 2026-05-12 — Restore episode-level search for continuing seasons
+## 2026-05-12 — Restore episode-level Sonarr search for continuing seasons
 
-**User prompt:** Reported that ongoing TV seasons were being treated too much like complete-season searches instead of falling back to currently released episode results.
+**User prompt:** `found a bug! i think the searcher looks for WHOLE SEASON collections all at once. so, when a show has incomplete seasons that are still in progress, there is individual episodes, but not the full thing so auto search has errors. it should be able to determine a show is in progress or releasing new episodes and switch the logic to be able to download individual episodes at a time to keep up with the new releases. this is something that has worked before with Invincible so something must have broken along the way.`
 
 **What was broken / what changed:**
-- Traced the regression to the modular Sonarr search pipeline introduced in `3f1be36` on 2026-05-12. That path only flipped season-level monitoring and then ran `SeasonSearch`, which left continuing seasons with unmonitored episode rows in Sonarr and no eligible episode-level grabs.
+- Traced the regression to the modular Sonarr search pipeline introduced in `3f1be36` on 2026-05-12. That path only flipped season-level monitoring and then ran `SeasonSearch`, which left continuing shows like `The Boys` with unmonitored episode rows in Sonarr and no eligible episode-level grabs.
 - Added a Sonarr search planner that explicitly enables target episode monitoring through `/api/v3/episode/monitor`, detects released missing episodes in continuing seasons, and swaps those searches to `EpisodeSearch` instead of assuming a season pack exists.
 - Fixed Sonarr pipeline retries to reuse the same season-aware search planner and to fall back to `seasonNumbers` when `retrySeasonNumbers` is absent on newer pipeline entries.
 - Applied the same single-season Sonarr fallback in the add-series flow so freshly added continuing shows do not immediately fall back into the broken season-pack-only behavior.

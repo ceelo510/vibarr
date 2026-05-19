@@ -170,6 +170,34 @@
   color: var(--rail-hover-color) !important;
 }
 
+.service-strip {
+  mask-image: linear-gradient(to right, transparent 0, #000 16px, #000 calc(100% - 16px), transparent 100%);
+}
+
+.service-strip__link {
+  display: inline-flex;
+  min-width: 0;
+}
+
+.container-chip:hover {
+  background: var(--surface) !important;
+}
+
+.container-chip__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.container-chip__external {
+  opacity: 0;
+  transition: opacity 150ms ease;
+}
+
+.container-chip:hover .container-chip__external {
+  opacity: 1;
+}
+
 /* ── Hide scrollbar utility ── */
 .hide-scrollbar::-webkit-scrollbar { display: none; }
 .hide-scrollbar { scrollbar-width: none; }

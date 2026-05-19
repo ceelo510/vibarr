@@ -3,6 +3,7 @@ import React from 'react';
 import TorrentTableRaw from './TorrentTable';
 import PipelineCardRaw from './PipelineCard';
 import { SlskdCard as SlskdCardRaw } from './ActivityLog';
+import PosterImage from './PosterImage';
 // App polls constantly, so keep the largest child trees behind shallow prop-based memoization.
 const TorrentTable = React.memo(TorrentTableRaw);
 const PipelineCard = React.memo(PipelineCardRaw);
@@ -23,24 +24,24 @@ const ManualSearchModal = React.lazy(() => import('./ManualSearchModal'));
  * @param {string} name - Cleaned service name (e.g. "sonarr")
  * @param {string|null} href - URL to open when chip is clicked
  */
-function ContainerChip({ container, name, href }) {
-  const [hovered, setHovered] = useState(false);
+const ContainerChip = React.memo(function ContainerChip({ container, name, href }) {
   const [c1, c2] = getServiceGradient(name);
   return (
     <div
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
+      className="container-chip"
+      title={name}
       style={{
         display: 'flex', alignItems: 'center', gap: 6,
-        padding: '5px 12px', borderRadius: 20,
+        padding: '5px 10px', borderRadius: 20,
         fontSize: 11.5, fontWeight: 600, whiteSpace: 'nowrap',
         cursor: container.running && href ? 'pointer' : 'default',
         border: '1px solid var(--border-subtle)',
         color: container.running ? 'var(--text-secondary)' : 'var(--text-faint)',
         opacity: container.running ? 1 : 0.38,
-        background: hovered && container.running ? 'var(--surface)' : 'transparent',
+        background: 'transparent',
         transition: 'background 0.2s',
         userSelect: 'none',
+        maxWidth: 172,
       }}
     >
       <span style={{
@@ -51,17 +52,23 @@ function ContainerChip({ container, name, href }) {
       }}>
         {name[0]?.toUpperCase()}
       </span>
-      {name}
-      {hovered && href && (
-        <span className="material-symbols-rounded" style={{
+      <span className="container-chip__label" style={{
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+      }}>
+        {name}
+      </span>
+      {href && (
+        <span className="material-symbols-rounded container-chip__external" style={{
           fontSize: 11, color: 'rgba(235,235,245,0.45)',
           fontVariationSettings: "'FILL' 0",
           marginLeft: 1,
+          flexShrink: 0,
         }}>open_in_new</span>
       )}
     </div>
   );
-}
+});
 
 /**
  * Vertical navigation rail button with active indicator and badge.
@@ -212,16 +219,13 @@ function PendingSearchCard({ search }) {
       background: 'var(--surface-subtle)', borderRadius: 10,
       border: `1px solid ${isSearching ? 'rgba(255,159,10,0.2)' : 'var(--border-subtle)'}`,
     }}>
-      {search.posterUrl ? (
-        <img src={search.posterUrl.startsWith('/api/') ? search.posterUrl : `/api/poster?url=${encodeURIComponent(search.posterUrl)}`}
-          alt="" style={{ width: 32, height: 44, objectFit: 'cover', borderRadius: 4, flexShrink: 0 }}
-          decoding="async"
-          onError={e => { e.target.style.display = 'none'; }} />
-      ) : (
-        <div style={{ width: 32, height: 44, borderRadius: 4, background: 'var(--border-subtle)', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <span className="material-symbols-rounded" style={{ fontSize: 16, color: 'var(--text-faint)' }}>tv</span>
-        </div>
-      )}
+      <PosterImage
+        url={search.posterUrl}
+        title={search.title}
+        icon={search.service === 'sonarr' ? 'tv' : search.service === 'lidarr' ? 'album' : 'movie'}
+        style={{ width: 32, height: 44, borderRadius: 4, flexShrink: 0 }}
+        fallbackStyle={{ background: 'var(--border-subtle)' }}
+      />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {search.title}
@@ -988,16 +992,13 @@ function ArrQueueCard({ item }) {
       background: hasError ? 'rgba(255,159,10,0.04)' : 'var(--surface-subtle)', borderRadius: 10,
       border: `1px solid ${hasError ? 'rgba(255,159,10,0.2)' : 'var(--border-subtle)'}`,
     }}>
-      {item.posterUrl ? (
-        <img src={item.posterUrl.startsWith('/api/') ? item.posterUrl : `/api/poster?url=${encodeURIComponent(item.posterUrl)}`}
-          alt="" style={{ width: 32, height: 44, objectFit: 'cover', borderRadius: 4, flexShrink: 0 }}
-          decoding="async"
-          onError={e => { e.target.style.display = 'none'; }} />
-      ) : (
-        <div style={{ width: 32, height: 44, borderRadius: 4, background: 'var(--border-subtle)', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <span className="material-symbols-rounded" style={{ fontSize: 16, color: 'var(--text-faint)' }}>{item.service === 'sonarr' ? 'tv' : 'movie'}</span>
-        </div>
-      )}
+      <PosterImage
+        url={item.posterUrl}
+        title={item.title}
+        icon={item.service === 'sonarr' ? 'tv' : item.service === 'lidarr' ? 'album' : 'movie'}
+        style={{ width: 32, height: 44, borderRadius: 4, flexShrink: 0 }}
+        fallbackStyle={{ background: 'var(--border-subtle)' }}
+      />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {item.title}{item.episode ? ` — ${item.episode}` : ''}
@@ -1076,6 +1077,8 @@ export default function App() {
   const mobileSearchDebounce = useRef(null);
   // Pollers read the latest torrent list from here without recreating their intervals.
   const torrentsRef = useRef([]);
+  const mediaInfoRef = useRef({});
+  const mediaInfoInflightRef = useRef(new Set());
   const prevPipelineRef = useRef({});
   const startingSearchTimersRef = useRef([]);
   const setupGateWasUsedRef = useRef(false);
@@ -1156,10 +1159,21 @@ export default function App() {
 
   const fetchMediaInfo = useCallback((torrentList) => {
     try {
-      const hashes = (torrentList || []).map(t => t.hash).filter(Boolean);
+      const hashes = [...new Set((torrentList || []).map(t => t.hash).filter(Boolean))]
+        .filter((hash) => !mediaInfoRef.current[hash] && !mediaInfoInflightRef.current.has(hash));
       if (hashes.length === 0) return;
+      hashes.forEach((hash) => mediaInfoInflightRef.current.add(hash));
       apiFetch(`/api/media-info/batch?hashes=${hashes.join(',')}`)
-        .then(data => setMediaInfo(prev => ({ ...prev, ...data })))
+        .then((data) => {
+          setMediaInfo((prev) => {
+            const next = { ...prev, ...data };
+            mediaInfoRef.current = next;
+            return next;
+          });
+        })
+        .finally(() => {
+          hashes.forEach((hash) => mediaInfoInflightRef.current.delete(hash));
+        })
         .catch(e => console.error('[fetchMediaInfo]', e));
     } catch (e) { console.error('[fetchMediaInfo]', e); }
   }, []);
@@ -1212,6 +1226,8 @@ export default function App() {
     setStartingSearch(false);
     setArrQueue([]);
     setMediaInfo({});
+    mediaInfoRef.current = {};
+    mediaInfoInflightRef.current.clear();
     setBwHistory([]);
     setBwTotals({ dl: 0, ul: 0 });
     setBwLifetime({ dl: 0, ul: 0 });
@@ -1734,7 +1750,7 @@ export default function App() {
           padding: '0 28px', gap: 8,
           overflowX: 'auto',
           scrollbarWidth: 'none',
-        }} className="hide-scrollbar">
+        }} className="hide-scrollbar service-strip">
           {sortedContainers.map(c => {
             const name = cleanName(c.name);
             const port = c.ports?.find(p => p.host) || c.ports?.[0];
@@ -1744,7 +1760,7 @@ export default function App() {
                   : getServiceUrl(name))
               : null;
             return href ? (
-              <a key={c.id} href={href} target="_blank" rel="noopener noreferrer" style={{ textDecoration: 'none' }}>
+              <a key={c.id} href={href} target="_blank" rel="noopener noreferrer" className="service-strip__link" style={{ textDecoration: 'none' }}>
                 <ContainerChip container={c} name={name} href={href} />
               </a>
             ) : (
